@@ -1,0 +1,58 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "nudgeappbyb",
+          "appId": "1:265057195582:android:266187c45291995c75636f",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "ios": {
+        "default": {
+          "projectId": "nudgeappbyb",
+          "appId": "1:265057195582:ios:ede5d5809598631a75636f",
+          "uploadDebugSymbols": false,
+          "fileOutput": "ios/Runner/GoogleService-Info.plist"
+        }
+      },
+      "macos": {
+        "default": {
+          "projectId": "nudgeappbyb",
+          "appId": "1:265057195582:ios:ede5d5809598631a75636f",
+          "uploadDebugSymbols": false,
+          "fileOutput": "macos/Runner/GoogleService-Info.plist"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "nudgeappbyb",
+          "configurations": {
+            "android": "1:265057195582:android:266187c45291995c75636f",
+            "ios": "1:265057195582:ios:ede5d5809598631a75636f",
+            "macos": "1:265057195582:ios:ede5d5809598631a75636f",
+            "web": "1:265057195582:web:07d90baa07a21fac75636f",
+            "windows": "1:265057195582:web:16c8c89dcd1da1bd75636f"
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "default",
+      "disallowLegacyRuntimeConfig": true,
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log",
+        "*.local"
+      ],
+      "predeploy": [
+        "npm --prefix \"$RESOURCE_DIR\" run lint"
+      ]
+    }
+  ]
+}

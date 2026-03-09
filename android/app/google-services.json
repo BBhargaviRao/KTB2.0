@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "265057195582",
+    "project_id": "nudgeappbyb",
+    "storage_bucket": "nudgeappbyb.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:265057195582:android:266187c45291995c75636f",
+        "android_client_info": {
+          "package_name": "com.example.ktb_nudges"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA-5V_Kff8yc18GNt-oCZbWRHECnW9VvOw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

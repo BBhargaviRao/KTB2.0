@@ -276,3 +276,60 @@ exports.generateTestNudges = functions.https.onRequest(async (req, res) => {
 
   res.send("Test nudges generated");
 });
+exports.sendNudgeNotification = functions.firestore
+    .document("families/{familyId}/nudges/{nudgeId}")
+    .onCreate(async (snap, context) => {
+      const db = admin.firestore();
+      const nudge = snap.data();
+
+      const familyId = context.params.familyId;
+      const targetAccountId = nudge.targetAccountId;
+      const prompt = nudge.prompt;
+
+      if (!targetAccountId) {
+        console.log("No targetAccountId found on nudge");
+        return null;
+      }
+
+      // Find device registered for this account
+      const deviceSnapshot = await db.collection("device_registrations")
+          .where("familyId", "==", familyId)
+          .where("accountId", "==", targetAccountId)
+          .limit(1)
+          .get();
+
+      if (deviceSnapshot.empty) {
+        console.log("No device found for account:", targetAccountId);
+        return null;
+      }
+
+      const deviceData = deviceSnapshot.docs[0].data();
+      const admToken = deviceData.admToken;
+
+      if (!admToken) {
+        console.log("Device has no ADM token");
+        return null;
+      }
+
+      // Get Amazon access token
+      const accessToken = await getAdmAccessToken();
+
+      // Send notification
+      await postJson(
+          "https://api.amazon.com/messaging/registrations/" +
+          `${admToken}/messages`,
+          {
+            data: {
+              title: "New Nudge",
+              body: prompt,
+            },
+            priority: "high",
+            expiresAfter: 3600,
+          },
+          accessToken,
+      );
+
+      console.log("Notification sent for nudge:", context.params.nudgeId);
+
+      return null;
+    });

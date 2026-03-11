@@ -2,6 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:ktb_nudges/features/parent_login/parent_login_screen.dart';
 import 'package:ktb_nudges/features/child_login/child_login_screen.dart';
 
@@ -10,7 +11,6 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Lock text scaling so it stays identical to Figma
     final mq = MediaQuery.of(context);
 
     return MediaQuery(
@@ -19,8 +19,6 @@ class HomeScreen extends StatelessWidget {
         body: Container(
           width: double.infinity,
           height: double.infinity,
-
-          // EXACT SAME AS SPLASH SCREEN
           decoration: const BoxDecoration(
             gradient: LinearGradient(
               begin: Alignment.topLeft,
@@ -34,11 +32,11 @@ class HomeScreen extends StatelessWidget {
               stops: [0.0, 0.38, 0.75, 1.0],
             ),
           ),
-
           child: SafeArea(
             child: Center(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 24, vertical: 24),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: const [
@@ -78,12 +76,11 @@ class _FamilyCodeCard extends StatefulWidget {
 
 class _FamilyCodeCardState extends State<_FamilyCodeCard> {
   static const double _designW = 296;
-  static const double _designH = 430; // increased to fit the Continue button
+  static const double _designH = 430;
 
   final _familyCodeCtrl = TextEditingController();
   final _pinCtrl = TextEditingController();
 
-  // pin should be visible by default.
   bool _pinHidden = false;
 
   @override
@@ -93,13 +90,12 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
     super.dispose();
   }
 
-    Future<Map<String, dynamic>?> _lookupAccount({
+  Future<Map<String, dynamic>?> _lookupAccount({
     required String familyCode,
     required String pin,
-    }) async {
+  }) async {
     final db = FirebaseFirestore.instance;
 
-    // Find the family doc with this familyCode
     final famSnap = await db
         .collection('families')
         .where('familyCode', isEqualTo: familyCode)
@@ -110,7 +106,6 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
 
     final familyDoc = famSnap.docs.first;
 
-    // Find an account with this pin inside that family
     final acctSnap = await familyDoc.reference
         .collection('accounts')
         .where('pin', isEqualTo: pin)
@@ -130,101 +125,132 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
     };
   }
 
+  Future<void> _linkDeviceToLoggedInAccount({
+    required String familyId,
+    required String accountId,
+    required String role,
+    required String displayName,
+  }) async {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
+
+    if (uid == null) {
+      print('No Firebase auth UID found. Device linking skipped.');
+      return;
+    }
+
+    await FirebaseFirestore.instance
+        .collection('device_registrations')
+        .doc(uid)
+        .set({
+      'uid': uid,
+      'familyId': familyId,
+      'accountId': accountId,
+      'role': role,
+      'displayName': displayName,
+      'linkedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    print('Device registration linked to family/account successfully.');
+  }
+
   Future<void> _handleContinue() async {
-  final familyCode = _familyCodeCtrl.text.trim();
-  final pin = _pinCtrl.text.trim();
+    final familyCode = _familyCodeCtrl.text.trim();
+    final pin = _pinCtrl.text.trim();
 
-  if (familyCode.isEmpty || pin.isEmpty) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Please enter Family Code and PIN')),
-    );
-    return;
-  }
-
-  if (familyCode.length != 6) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Family Code must be 6 characters')),
-    );
-    return;
-  }
-
-  if (pin.length != 4) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('PIN must be 4 digits')),
-    );
-    return;
-  }
-
-  try {
-    final result = await _lookupAccount(
-      familyCode: familyCode,
-      pin: pin,
-    );
-
-    if (!mounted) return;
-
-    if (result == null) {
+    if (familyCode.isEmpty || pin.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Invalid Family Code or PIN')),
+        const SnackBar(content: Text('Please enter Family Code and PIN')),
       );
       return;
     }
 
-    final familyId = result['familyId'] as String;
-    final accountId = result['accountId'] as String;
-    final role = (result['role'] ?? '') as String;
-    final name = (result['displayName'] ?? '') as String;
+    if (familyCode.length != 6) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Family Code must be 6 characters')),
+      );
+      return;
+    }
 
-    if (role == 'parent') {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => ParentLoginScreen(
-            parentName: name.isEmpty ? 'Parent' : name,
-            familyId: familyId,
-            parentAccountId: accountId,
+    if (pin.length != 4) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('PIN must be 4 digits')),
+      );
+      return;
+    }
+
+    try {
+      final result = await _lookupAccount(
+        familyCode: familyCode,
+        pin: pin,
+      );
+
+      if (!mounted) return;
+
+      if (result == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Invalid Family Code or PIN')),
+        );
+        return;
+      }
+
+      final familyId = result['familyId'] as String;
+      final accountId = result['accountId'] as String;
+      final role = (result['role'] ?? '') as String;
+      final name = (result['displayName'] ?? '') as String;
+
+      await _linkDeviceToLoggedInAccount(
+        familyId: familyId,
+        accountId: accountId,
+        role: role,
+        displayName: name,
+      );
+
+      if (!mounted) return;
+
+      if (role == 'parent') {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => ParentLoginScreen(
+              parentName: name.isEmpty ? 'Parent' : name,
+              familyId: familyId,
+              parentAccountId: accountId,
+            ),
           ),
-        ),
-      );
-      return;
-    }
+        );
+        return;
+      }
 
-    if (role == 'child') {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => ChildLoginScreen(
-            childName: name.isEmpty ? 'Child' : name,
-            familyId: familyId,
-            childAccountId: accountId,
+      if (role == 'child') {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => ChildLoginScreen(
+              childName: name.isEmpty ? 'Child' : name,
+              familyId: familyId,
+              childAccountId: accountId,
+            ),
           ),
-        ),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Account role is invalid')),
       );
-      return;
+    } on FirebaseException catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Firebase error: ${e.code}')),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
     }
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Account role is invalid')),
-    );
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Account role is invalid')),
-    );
-  } on FirebaseException catch (e) {
-    // This will catch permission-denied / missing-index / etc.
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Firebase error: ${e.code}')),
-    );
-  } catch (e) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Error: $e')),
-    );
   }
-}
 
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Scale down if needed, never scale up.
         final scale = (constraints.maxWidth / _designW).clamp(0.0, 1.0);
 
         return Transform.scale(
@@ -240,12 +266,11 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(30),
                     gradient: const LinearGradient(
-                      // background: linear-gradient(149deg, ...)
                       begin: Alignment(0.85, -1.0),
                       end: Alignment(-0.85, 1.0),
                       colors: [
-                        Color(0x4D6200FF), // rgba(98, 0, 255, 0.30)
-                        Color(0x4DFF8C00), // rgba(255, 140, 0, 0.30)
+                        Color(0x4D6200FF),
+                        Color(0x4DFF8C00),
                       ],
                       stops: [0.0295, 0.9743],
                     ),
@@ -256,7 +281,6 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                     child: Column(
                       children: [
                         const SizedBox(height: 50),
-
                         const Text(
                           'Family Code',
                           textAlign: TextAlign.center,
@@ -269,9 +293,7 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                             letterSpacing: -0.408,
                           ),
                         ),
-
                         const SizedBox(height: 24),
-
                         _PillTextField(
                           controller: _familyCodeCtrl,
                           height: 64,
@@ -287,9 +309,7 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                           ],
                           showEye: false,
                         ),
-
                         const SizedBox(height: 36),
-
                         const Text(
                           'Pin',
                           textAlign: TextAlign.center,
@@ -302,9 +322,7 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                             letterSpacing: -0.408,
                           ),
                         ),
-
                         const SizedBox(height: 24),
-
                         _PillTextField(
                           controller: _pinCtrl,
                           height: 64,
@@ -320,9 +338,7 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                               setState(() => _pinHidden = !_pinHidden),
                           onSubmitted: (_) => _handleContinue(),
                         ),
-
                         const SizedBox(height: 22),
-
                         SizedBox(
                           width: 325,
                           height: 77,
@@ -333,11 +349,11 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                               onTap: _handleContinue,
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: Colors.white.withOpacity(0.6), // hsba(0, 0%, 100%, 0.6)
+                                  color: Colors.white.withOpacity(0.6),
                                   borderRadius: BorderRadius.circular(30),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: Colors.black.withOpacity(0.25), // hsba(0,0%,0%,0.25)
+                                      color: Colors.black.withOpacity(0.25),
                                       offset: const Offset(0, 5),
                                       blurRadius: 4,
                                       spreadRadius: 0,
@@ -349,7 +365,7 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                                   'Continue',
                                   style: TextStyle(
                                     fontFamily: 'InstrumentSerif',
-                                    fontSize: 28, // tweak if your Figma text size differs
+                                    fontSize: 28,
                                     fontWeight: FontWeight.w400,
                                     color: Colors.black,
                                     letterSpacing: -0.2,
@@ -359,8 +375,6 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
                             ),
                           ),
                         ),
-
-
                         const SizedBox(height: 22),
                       ],
                     ),
@@ -382,10 +396,8 @@ class _PillTextField extends StatelessWidget {
   final TextInputType keyboardType;
   final TextInputAction textInputAction;
   final List<TextInputFormatter> inputFormatters;
-
   final VoidCallback? onToggleVisibility;
   final bool showEye;
-
   final ValueChanged<String>? onSubmitted;
 
   const _PillTextField({
@@ -441,7 +453,6 @@ class _PillTextField extends StatelessWidget {
               ),
             ),
           ),
-
           if (showEye && onToggleVisibility != null)
             Positioned(
               right: 16,

@@ -1,12 +1,38 @@
 package com.example.ktb_nudges
 
 import android.content.Context
+import android.os.Bundle
+import android.util.Log
+import com.amazon.device.messaging.ADM
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
+
     private val CHANNEL = "ktb_nudges/adm"
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        Log.e("KTB_ADM", "MainActivity onCreate started")
+
+        thread {
+            try {
+                val adm = ADM(this)
+                val registrationId = adm.registrationId
+
+                if (registrationId == null) {
+                    Log.e("KTB_ADM", "No ADM registration ID yet. Starting registration.")
+                    adm.startRegister()
+                } else {
+                    Log.e("KTB_ADM", "Existing ADM registration ID: $registrationId")
+                }
+            } catch (e: Exception) {
+                Log.e("KTB_ADM", "ADM setup failed: ${e.message}", e)
+            }
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)

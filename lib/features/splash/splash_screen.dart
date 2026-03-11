@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import '../home/home_screen.dart';
+import '../../services/adm_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -12,12 +15,43 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
+    _saveAdmTokenToFirestore();
 
     Future.delayed(const Duration(milliseconds: 1500), () {
       if (!mounted) return;
 
       Navigator.of(context).pushReplacement(_smartAnimateTo(const HomeScreen()));
     });
+  }
+
+  Future<void> _saveAdmTokenToFirestore() async {
+    try {
+      final token = await AdmService.getRegistrationId();
+      final uid = FirebaseAuth.instance.currentUser?.uid;
+
+      print('ADM TOKEN FROM FLUTTER: $token');
+      print('CURRENT AUTH UID: $uid');
+
+      if (token == null || uid == null) {
+        print('ADM token or auth uid is missing, so Firestore save was skipped.');
+        return;
+      }
+
+      await FirebaseFirestore.instance
+          .collection('device_registrations')
+          .doc(uid)
+          .set({
+        'uid': uid,
+        'admToken': token,
+        'platform': 'fire_tablet',
+        'pushProvider': 'adm',
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+
+      print('ADM token saved to Firestore successfully.');
+    } catch (e) {
+      print('Error saving ADM token to Firestore: $e');
+    }
   }
 
   PageRouteBuilder _smartAnimateTo(Widget page) {
@@ -31,10 +65,7 @@ class _SplashScreenState extends State<SplashScreen> {
           curve: Curves.easeOut,
         );
 
-        // Crossfade
         final opacity = Tween<double>(begin: 0.0, end: 1.0).animate(curve);
-
-        // Very subtle scale to mimic "smart animate" smoothness
         final scale = Tween<double>(begin: 0.985, end: 1.0).animate(curve);
 
         return FadeTransition(
@@ -50,7 +81,6 @@ class _SplashScreenState extends State<SplashScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Your existing splash UI (keep as-is)
     return Scaffold(
       body: Container(
         width: double.infinity,

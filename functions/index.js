@@ -194,10 +194,13 @@ exports.sendAdmTestNotification = functions.https.onRequest(
 );
 
 exports.generateDailyNudges = functions.pubsub
-    .schedule("every 24 hours")
+    .schedule("every 30 minutes")
     .timeZone("America/Denver")
     .onRun(async () => {
       const db = admin.firestore();
+      const now = new Date();
+      const hour = now.getHours();
+      const dateKey = now.toISOString().split("T")[0];
 
       const familiesSnapshot = await db.collection("families").get();
 
@@ -214,9 +217,52 @@ exports.generateDailyNudges = functions.pubsub
           const data = account.data();
           const role = data.role;
 
-          const prompt = role === "child" ?
-            "Did anything online today make you feel happy or upset?" :
-            "Did you notice anything about your child's technology use today?";
+          let nudgeType = null;
+          let deliveryWindow = null;
+          let prompt = null;
+
+          if (role === "parent" && hour >= 8 && hour < 11) {
+            nudgeType = "check_in";
+            deliveryWindow = "parent_morning";
+            prompt = "How do you think your child is feeling " +
+              "about technology so far today?";
+          } else if (role === "child" && hour >= 13 && hour < 16) {
+            nudgeType = "check_in";
+            deliveryWindow = "child_afternoon";
+            prompt = "How are you feeling about your screen time today?";
+          } else if (role === "parent" && hour >= 18 && hour < 21) {
+            nudgeType = "reflection";
+            deliveryWindow = "parent_evening";
+            prompt = "Did you notice anything about your child's " +
+              "technology use today?";
+          } else if (role === "child" && hour >= 19 && hour < 21) {
+            nudgeType = "reflection";
+            deliveryWindow = "child_night";
+            prompt = "What was one good or difficult thing about " +
+              "your screen time today?";
+          } else {
+            continue;
+          }
+
+          const existingNudge = await db
+              .collection("families")
+              .doc(familyId)
+              .collection("nudges")
+              .where("targetAccountId", "==", account.id)
+              .where("deliveryWindow", "==", deliveryWindow)
+              .where("dateKey", "==", dateKey)
+              .limit(1)
+              .get();
+
+          if (!existingNudge.empty) {
+            console.log(
+                "Skipping duplicate nudge:",
+                account.id,
+                deliveryWindow,
+                dateKey,
+            );
+            continue;
+          }
 
           await db
               .collection("families")
@@ -226,14 +272,25 @@ exports.generateDailyNudges = functions.pubsub
                 prompt: prompt,
                 targetAccountId: account.id,
                 targetRole: role,
+                nudgeType: nudgeType,
+                deliveryWindow: deliveryWindow,
+                dateKey: dateKey,
                 status: "pending",
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
                 scheduledFor: admin.firestore.FieldValue.serverTimestamp(),
               });
+
+          console.log(
+              "Created nudge:",
+              familyId,
+              account.id,
+              deliveryWindow,
+              dateKey,
+          );
         }
       }
 
-      console.log("Daily nudges created for all families");
+      console.log("Window-based nudge check completed");
       return null;
     });
 
@@ -255,9 +312,37 @@ exports.generateTestNudges = functions.https.onRequest(async (req, res) => {
       const data = account.data();
       const role = data.role;
 
+      const now = new Date();
+      const dateKey = now.toISOString().split("T")[0];
+
+      const nudgeType = role === "child" ? "check_in" : "reflection";
+      const deliveryWindow = role === "child" ?
+        "child_afternoon" :
+        "parent_evening";
+
       const prompt = role === "child" ?
         "What was the most interesting thing you did online today?" :
         "Did you notice anything positive about your child's tech use today?";
+
+      const existingNudge = await db
+          .collection("families")
+          .doc(familyId)
+          .collection("nudges")
+          .where("targetAccountId", "==", account.id)
+          .where("deliveryWindow", "==", deliveryWindow)
+          .where("dateKey", "==", dateKey)
+          .limit(1)
+          .get();
+
+      if (!existingNudge.empty) {
+        console.log(
+            "Skipping duplicate nudge:",
+            account.id,
+            deliveryWindow,
+            dateKey,
+        );
+        continue;
+      }
 
       await db
           .collection("families")
@@ -267,6 +352,9 @@ exports.generateTestNudges = functions.https.onRequest(async (req, res) => {
             prompt: prompt,
             targetAccountId: account.id,
             targetRole: role,
+            nudgeType: nudgeType,
+            deliveryWindow: deliveryWindow,
+            dateKey: dateKey,
             status: "pending",
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
             scheduledFor: admin.firestore.FieldValue.serverTimestamp(),
@@ -276,6 +364,7 @@ exports.generateTestNudges = functions.https.onRequest(async (req, res) => {
 
   res.send("Test nudges generated");
 });
+
 exports.sendNudgeNotification = functions.firestore
     .document("families/{familyId}/nudges/{nudgeId}")
     .onCreate(async (snap, context) => {
@@ -291,7 +380,6 @@ exports.sendNudgeNotification = functions.firestore
         return null;
       }
 
-      // Find device registered for this account
       const deviceSnapshot = await db.collection("device_registrations")
           .where("familyId", "==", familyId)
           .where("accountId", "==", targetAccountId)
@@ -311,10 +399,8 @@ exports.sendNudgeNotification = functions.firestore
         return null;
       }
 
-      // Get Amazon access token
       const accessToken = await getAdmAccessToken();
 
-      // Send notification
       await postJson(
           "https://api.amazon.com/messaging/registrations/" +
           `${admToken}/messages`,

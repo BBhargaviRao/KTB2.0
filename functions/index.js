@@ -2,8 +2,306 @@ const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const https = require("https");
 const querystring = require("querystring");
+const OpenAI = require("openai");
+const {defineSecret} = require("firebase-functions/params");
+
+const openaiApiKey = defineSecret("OPENAI_API_KEY");
 
 admin.initializeApp();
+
+exports.testOpenAI = functions
+    .runWith({secrets: ["OPENAI_API_KEY"]})
+    .https.onRequest(async (req, res) => {
+      try {
+        const client = new OpenAI({
+          apiKey: openaiApiKey.value(),
+        });
+
+        const response = await client.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            {role: "user", content: "Say hello in 5 words."},
+          ],
+        });
+
+        const text = response.choices[0].message.content;
+
+        res.send({success: true, text});
+      } catch (err) {
+        console.error(err);
+        res.status(500).send({error: err.message});
+      }
+    });
+
+exports.testLatestChildResponse = functions.https.onRequest(
+    async (req, res) => {
+      try {
+        const familyId = req.query.familyId;
+
+        if (!familyId) {
+          return res.status(400).send({
+            error: "Missing familyId",
+          });
+        }
+
+        const now = new Date();
+        const startOfDay = new Date(now);
+        startOfDay.setHours(0, 0, 0, 0);
+
+        const nudgesSnap = await admin.firestore()
+            .collection("families")
+            .doc(familyId)
+            .collection("nudges")
+            .where("targetRole", "==", "child")
+            .where("status", "==", "answered")
+            .where(
+                "createdAt",
+                ">=",
+                admin.firestore.Timestamp.fromDate(startOfDay),
+            )
+            .orderBy("createdAt", "desc")
+            .limit(1)
+            .get();
+
+        if (nudgesSnap.empty) {
+          return res.send({
+            success: true,
+            found: false,
+            message: "No answered child nudges found for today.",
+          });
+        }
+
+        const doc = nudgesSnap.docs[0];
+        const data = doc.data();
+
+        return res.send({
+          success: true,
+          found: true,
+          nudgeId: doc.id,
+          responseText: data.response && data.response.text ?
+            data.response.text :
+            null,
+          deliveryWindow: data.deliveryWindow || null,
+          createdAt: data.createdAt || null,
+          shareWithParent: data.shareWithParent || false,
+        });
+      } catch (err) {
+        console.error(err);
+        return res.status(500).send({
+          error: err.message,
+        });
+      }
+    },
+);
+
+exports.testGenerateParentPrompt = functions
+    .runWith({secrets: ["OPENAI_API_KEY"]})
+    .https.onRequest(async (req, res) => {
+      try {
+        const childText = req.query.text;
+
+        if (!childText) {
+          return res.status(400).send({
+            error: "Missing ?text= query param",
+          });
+        }
+
+        const client = new OpenAI({
+          apiKey: openaiApiKey.value(),
+        });
+
+        const response = await client.chat.completions.create({
+          model: "gpt-4o-mini",
+          messages: [
+            {
+              role: "system",
+              content: `
+You create a SHORT PARENT NUDGE for a parent,
+based on a child's private digital experience.
+
+The child’s exact words are private input only.
+Never reveal specific details, events, or quotes.
+
+Your goal:
+- Help the parent gently connect with their child
+- Encourage trust, conversation, and emotional awareness
+- Reflect whether the child’s DIGITAL experience
+  was likely positive or challenging
+- Keep the tone warm, natural, and human
+
+Guidelines:
+- If the child experience seems challenging:
+  → encourage a gentle emotional check-in
+- If it seems positive:
+  → encourage curiosity and sharing
+- If unclear:
+  → keep it neutral but still connection-focused
+- Keep the nudge subtly grounded in digital or online experiences 
+  (without revealing specifics)
+
+Rules:
+- The nudge is for the PARENT
+- Do NOT advise the child
+- Do NOT reveal specifics
+- Do NOT mention platforms, games, or events
+- Do NOT quote the child
+- Do NOT sound clinical or robotic
+- Ask ONE natural parent-facing question
+- Max 20 words
+
+Write like a real app nudge:
+short, warm, and easy to act on
+
+Return JSON only:
+{
+  "contextType": "positive | challenging | neutral",
+  "parentPrompt": "..."
+}
+              `,
+            },
+            {
+              role: "user",
+              content: childText,
+            },
+          ],
+        });
+
+        const text = response.choices[0].message.content;
+
+        return res.send({
+          success: true,
+          raw: text,
+        });
+      } catch (err) {
+        console.error(err);
+        return res.status(500).send({
+          error: err.message,
+        });
+      }
+    });
+
+/**
+ * Gets the latest answered child response for today.
+ * @param {string} familyId
+ * @return {Promise<{nudgeId: string, text: ?string}|null>}
+ */
+async function getLatestChildResponse(familyId) {
+  const now = new Date();
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const nudgesSnap = await admin.firestore()
+      .collection("families")
+      .doc(familyId)
+      .collection("nudges")
+      .where("targetRole", "==", "child")
+      .where("status", "==", "answered")
+      .where(
+          "createdAt",
+          ">=",
+          admin.firestore.Timestamp.fromDate(startOfDay),
+      )
+      .orderBy("createdAt", "desc")
+      .limit(1)
+      .get();
+
+  if (nudgesSnap.empty) {
+    return null;
+  }
+
+  const doc = nudgesSnap.docs[0];
+  const data = doc.data();
+
+  return {
+    nudgeId: doc.id,
+    text: data.response && data.response.text ?
+      data.response.text :
+      null,
+  };
+}
+
+/**
+ * Generates a parent-safe nudge from a child's response.
+ * @param {string} childText
+ * @return {Promise<{contextType: string, parentPrompt: string}|null>}
+ */
+async function generateParentPromptFromChildText(childText) {
+  if (!childText) {
+    return null;
+  }
+
+  const client = new OpenAI({
+    apiKey: openaiApiKey.value(),
+  });
+
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: `
+You create a SHORT PARENT NUDGE for a parent,
+based on a child's private digital experience.
+
+The child’s exact words are private input only.
+Never reveal specific details, events, or quotes.
+
+Your goal:
+- Help the parent gently connect with their child
+- Encourage trust, conversation, and emotional awareness
+- Reflect whether the child’s DIGITAL experience
+  was likely positive or challenging
+- Keep the tone warm, natural, and human
+
+Guidelines:
+- If the child experience seems challenging:
+  → encourage a gentle emotional check-in
+- If it seems positive:
+  → encourage curiosity and sharing
+- If unclear:
+  → keep it neutral but still connection-focused
+- Keep the nudge subtly grounded in digital or online 
+  experiences (without revealing specifics)
+
+Rules:
+- The nudge is for the PARENT
+- Do NOT advise the child
+- Do NOT reveal specifics
+- Do NOT mention platforms, games, or events
+- Do NOT quote the child
+- Do NOT sound clinical or robotic
+- Ask ONE natural parent-facing question
+- Max 20 words
+
+Write like a real app nudge:
+short, warm, and easy to act on
+
+Return JSON only:
+{
+  "contextType": "positive | challenging | neutral",
+  "parentPrompt": "..."
+}
+        `,
+      },
+      {
+        role: "user",
+        content: childText,
+      },
+    ],
+  });
+
+  const raw = response.choices[0].message.content;
+  const parsed = JSON.parse(raw);
+
+  if (!parsed.parentPrompt) {
+    return null;
+  }
+
+  return {
+    contextType: parsed.contextType || "neutral",
+    parentPrompt: parsed.parentPrompt,
+  };
+}
 
 /**
  * Sends an HTTPS POST request with form-urlencoded data.
@@ -130,6 +428,183 @@ async function getAdmAccessToken() {
   return parsed.access_token;
 }
 
+/**
+ * Central prompt library.
+ * Each prompt has a stable id and display text.
+ * @return {Object}
+ */
+function getPromptBank() {
+  return {
+    parent_morning: [
+      {
+        id: "parent_morning_1",
+        text:
+          "How do you think your child is feeling about technology " +
+          "so far today?",
+      },
+      {
+        id: "parent_morning_2",
+        text:
+          "What do you think your child is enjoying most about " +
+          "technology today?",
+      },
+      {
+        id: "parent_morning_3",
+        text:
+          "How connected or distracted does your child seem with " +
+          "technology today?",
+      },
+      {
+        id: "parent_morning_4",
+        text:
+          "Is there anything about your child's tech use so far today " +
+          "that you are wondering about?",
+      },
+    ],
+
+    child_afternoon: [
+      {
+        id: "child_afternoon_1",
+        text: "How are you feeling about your screen time today?",
+      },
+      {
+        id: "child_afternoon_2",
+        text: "Has anything online felt fun or frustrating today?",
+      },
+      {
+        id: "child_afternoon_3",
+        text:
+          "What kind of screen activity has stood out to you today?",
+      },
+      {
+        id: "child_afternoon_4",
+        text:
+          "What is something interesting, fun, or annoying that " +
+          "happened online today?",
+      },
+    ],
+
+    parent_evening: [
+      {
+        id: "parent_evening_1",
+        text:
+          "Did you notice anything about your child's technology use " +
+          "today?",
+      },
+      {
+        id: "parent_evening_2",
+        text:
+          "Was there a moment today when your child seemed engaged " +
+          "or frustrated with screens?",
+      },
+      {
+        id: "parent_evening_3",
+        text:
+          "Did anything about today's tech use stand out to you as " +
+          "a parent?",
+      },
+      {
+        id: "parent_evening_4",
+        text:
+          "Did you notice anything positive or challenging about " +
+          "your child's screen time today?",
+      },
+    ],
+
+    child_night: [
+      {
+        id: "child_night_1",
+        text:
+          "What was one good or difficult thing about your screen " +
+          "time today?",
+      },
+      {
+        id: "child_night_2",
+        text:
+          "What was the most interesting thing you did online today?",
+      },
+      {
+        id: "child_night_3",
+        text:
+          "Was there anything online today that made you feel really " +
+          "good or not so good?",
+      },
+      {
+        id: "child_night_4",
+        text:
+          "What is one thing about your screen time today that you " +
+          "want to remember or talk about?",
+      },
+    ],
+  };
+}
+
+/**
+ * Returns one random item from an array.
+ * @param {Array} items
+ * @return {*|null}
+ */
+function pickRandom(items) {
+  if (!items || !items.length) {
+    return null;
+  }
+
+  const index = Math.floor(Math.random() * items.length);
+  return items[index];
+}
+
+/**
+ * Picks a prompt for a delivery window while avoiding
+ * repeating the same prompt for the same account twice in a row.
+ * @param {FirebaseFirestore.Firestore} db
+ * @param {string} familyId
+ * @param {string} accountId
+ * @param {string} deliveryWindow
+ * @return {Promise<{id: string, text: string}|null>}
+ */
+async function pickPromptForAccount(
+    db,
+    familyId,
+    accountId,
+    deliveryWindow,
+) {
+  const promptBank = getPromptBank();
+  const prompts = promptBank[deliveryWindow] || [];
+
+  if (!prompts.length) {
+    return null;
+  }
+
+  const latestSnapshot = await db
+      .collection("families")
+      .doc(familyId)
+      .collection("nudges")
+      .where("targetAccountId", "==", accountId)
+      .where("deliveryWindow", "==", deliveryWindow)
+      .orderBy("createdAt", "desc")
+      .limit(1)
+      .get();
+
+  let lastPromptId = null;
+
+  if (!latestSnapshot.empty) {
+    const latestData = latestSnapshot.docs[0].data();
+    lastPromptId = latestData.promptId || null;
+  }
+
+  let eligiblePrompts = prompts;
+
+  if (lastPromptId) {
+    const filtered = prompts.filter((prompt) => prompt.id !== lastPromptId);
+
+    if (filtered.length > 0) {
+      eligiblePrompts = filtered;
+    }
+  }
+
+  return pickRandom(eligiblePrompts);
+}
+
 exports.sendAdmTestNotification = functions.https.onRequest(
     async (req, res) => {
       try {
@@ -193,8 +668,9 @@ exports.sendAdmTestNotification = functions.https.onRequest(
     },
 );
 
-exports.generateDailyNudges = functions.pubsub
-    .schedule("every 30 minutes")
+exports.generateDailyNudges = functions
+    .runWith({secrets: ["OPENAI_API_KEY"]})
+    .pubsub.schedule("every 30 minutes")
     .timeZone("America/Denver")
     .onRun(async () => {
       const db = admin.firestore();
@@ -219,28 +695,59 @@ exports.generateDailyNudges = functions.pubsub
 
           let nudgeType = null;
           let deliveryWindow = null;
-          let prompt = null;
+          let selectedPrompt = null;
 
           if (role === "parent" && hour >= 8 && hour < 11) {
             nudgeType = "check_in";
             deliveryWindow = "parent_morning";
-            prompt = "How do you think your child is feeling " +
-              "about technology so far today?";
           } else if (role === "child" && hour >= 13 && hour < 16) {
             nudgeType = "check_in";
             deliveryWindow = "child_afternoon";
-            prompt = "How are you feeling about your screen time today?";
           } else if (role === "parent" && hour >= 18 && hour < 21) {
             nudgeType = "reflection";
             deliveryWindow = "parent_evening";
-            prompt = "Did you notice anything about your child's " +
-              "technology use today?";
           } else if (role === "child" && hour >= 19 && hour < 21) {
             nudgeType = "reflection";
             deliveryWindow = "child_night";
-            prompt = "What was one good or difficult thing about " +
-              "your screen time today?";
           } else {
+            continue;
+          }
+
+          selectedPrompt = await pickPromptForAccount(
+              db,
+              familyId,
+              account.id,
+              deliveryWindow,
+          );
+
+          if (role === "parent" && deliveryWindow === "parent_evening") {
+            try {
+              const childData = await getLatestChildResponse(familyId);
+
+              if (childData && childData.text) {
+                const result = await generateParentPromptFromChildText(
+                    childData.text,
+                );
+
+                if (result && result.parentPrompt) {
+                  selectedPrompt = {
+                    id: "parent_evening_llm",
+                    text: result.parentPrompt,
+                  };
+
+                  console.log(
+                      "Using LLM parent prompt:",
+                      result.parentPrompt,
+                  );
+                }
+              }
+            } catch (err) {
+              console.error("LLM fallback to default prompt:", err);
+            }
+          }
+
+          if (!selectedPrompt) {
+            console.log("No prompt found for deliveryWindow:", deliveryWindow);
             continue;
           }
 
@@ -269,7 +776,9 @@ exports.generateDailyNudges = functions.pubsub
               .doc(familyId)
               .collection("nudges")
               .add({
-                prompt: prompt,
+                prompt: selectedPrompt.text,
+                promptText: selectedPrompt.text,
+                promptId: selectedPrompt.id,
                 targetAccountId: account.id,
                 targetRole: role,
                 nudgeType: nudgeType,
@@ -294,76 +803,111 @@ exports.generateDailyNudges = functions.pubsub
       return null;
     });
 
-exports.generateTestNudges = functions.https.onRequest(async (req, res) => {
-  const db = admin.firestore();
+exports.generateTestNudges = functions
+    .runWith({secrets: ["OPENAI_API_KEY"]})
+    .https.onRequest(async (req, res) => {
+      const db = admin.firestore();
 
-  const familiesSnapshot = await db.collection("families").get();
+      const familiesSnapshot = await db.collection("families").get();
 
-  for (const familyDoc of familiesSnapshot.docs) {
-    const familyId = familyDoc.id;
+      for (const familyDoc of familiesSnapshot.docs) {
+        const familyId = familyDoc.id;
 
-    const accountsSnapshot = await db
-        .collection("families")
-        .doc(familyId)
-        .collection("accounts")
-        .get();
+        const accountsSnapshot = await db
+            .collection("families")
+            .doc(familyId)
+            .collection("accounts")
+            .get();
 
-    for (const account of accountsSnapshot.docs) {
-      const data = account.data();
-      const role = data.role;
+        for (const account of accountsSnapshot.docs) {
+          const data = account.data();
+          const role = data.role;
 
-      const now = new Date();
-      const dateKey = now.toISOString().split("T")[0];
+          const now = new Date();
+          const dateKey = now.toISOString().split("T")[0];
 
-      const nudgeType = role === "child" ? "check_in" : "reflection";
-      const deliveryWindow = role === "child" ?
-        "child_afternoon" :
-        "parent_evening";
+          const nudgeType = role === "child" ? "check_in" : "reflection";
+          const deliveryWindow =
+            role === "child" ? "child_afternoon" : "parent_evening";
 
-      const prompt = role === "child" ?
-        "What was the most interesting thing you did online today?" :
-        "Did you notice anything positive about your child's tech use today?";
+          const selectedPrompt = await pickPromptForAccount(
+              db,
+              familyId,
+              account.id,
+              deliveryWindow,
+          );
 
-      const existingNudge = await db
-          .collection("families")
-          .doc(familyId)
-          .collection("nudges")
-          .where("targetAccountId", "==", account.id)
-          .where("deliveryWindow", "==", deliveryWindow)
-          .where("dateKey", "==", dateKey)
-          .limit(1)
-          .get();
+          if (!selectedPrompt) {
+            console.log("No prompt found for deliveryWindow:", deliveryWindow);
+            continue;
+          }
 
-      if (!existingNudge.empty) {
-        console.log(
-            "Skipping duplicate nudge:",
-            account.id,
-            deliveryWindow,
-            dateKey,
-        );
-        continue;
+          let finalPrompt = selectedPrompt.text;
+
+          if (role === "parent" && deliveryWindow === "parent_evening") {
+            try {
+              const childData = await getLatestChildResponse(familyId);
+
+              if (childData && childData.text) {
+                const result = await generateParentPromptFromChildText(
+                    childData.text,
+                );
+
+                if (result && result.parentPrompt) {
+                  finalPrompt = result.parentPrompt;
+                  console.log(
+                      "Using LLM parent test prompt:",
+                      finalPrompt,
+                  );
+                }
+              }
+            } catch (err) {
+              console.error("LLM fallback to default test prompt:", err);
+            }
+          }
+
+          const existingNudge = await db
+              .collection("families")
+              .doc(familyId)
+              .collection("nudges")
+              .where("targetAccountId", "==", account.id)
+              .where("deliveryWindow", "==", deliveryWindow)
+              .where("dateKey", "==", dateKey)
+              .limit(1)
+              .get();
+
+          if (!existingNudge.empty) {
+            console.log(
+                "Skipping duplicate nudge:",
+                account.id,
+                deliveryWindow,
+                dateKey,
+            );
+            continue;
+          }
+
+          await db
+              .collection("families")
+              .doc(familyId)
+              .collection("nudges")
+              .add({
+                prompt: finalPrompt,
+                promptText: finalPrompt,
+                promptId: selectedPrompt.id,
+                targetAccountId: account.id,
+                targetRole: role,
+                nudgeType: nudgeType,
+                deliveryWindow: deliveryWindow,
+                dateKey: dateKey,
+                status: "pending",
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                scheduledFor: admin.firestore.FieldValue.serverTimestamp(),
+              });
+        }
       }
 
-      await db
-          .collection("families")
-          .doc(familyId)
-          .collection("nudges")
-          .add({
-            prompt: prompt,
-            targetAccountId: account.id,
-            targetRole: role,
-            nudgeType: nudgeType,
-            deliveryWindow: deliveryWindow,
-            dateKey: dateKey,
-            status: "pending",
-            createdAt: admin.firestore.FieldValue.serverTimestamp(),
-            scheduledFor: admin.firestore.FieldValue.serverTimestamp(),
-          });
-    }
-  }
-
-  res.send("Test nudges generated");
-});
+      res.send("Test nudges generated");
+    });
 
 exports.sendNudgeNotification = functions.firestore
     .document("families/{familyId}/nudges/{nudgeId}")
@@ -380,7 +924,8 @@ exports.sendNudgeNotification = functions.firestore
         return null;
       }
 
-      const deviceSnapshot = await db.collection("device_registrations")
+      const deviceSnapshot = await db
+          .collection("device_registrations")
           .where("familyId", "==", familyId)
           .where("accountId", "==", targetAccountId)
           .limit(1)

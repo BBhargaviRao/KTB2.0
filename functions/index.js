@@ -429,8 +429,8 @@ async function getAdmAccessToken() {
 }
 
 /**
- * Central prompt library.
- * Each prompt has a stable id and display text.
+ * Central structured prompt library.
+ * Each prompt has stable research-ready metadata.
  * @return {Object}
  */
 function getPromptBank() {
@@ -438,24 +438,36 @@ function getPromptBank() {
     parent_morning: [
       {
         id: "parent_morning_1",
+        category: "parent_morning_check_in",
+        variant: "emotion_guess",
+        source: "library",
         text:
           "How do you think your child is feeling about technology " +
           "so far today?",
       },
       {
         id: "parent_morning_2",
+        category: "parent_morning_check_in",
+        variant: "positive_curiosity",
+        source: "library",
         text:
           "What do you think your child is enjoying most about " +
           "technology today?",
       },
       {
         id: "parent_morning_3",
+        category: "parent_morning_check_in",
+        variant: "attention_reflection",
+        source: "library",
         text:
           "How connected or distracted does your child seem with " +
           "technology today?",
       },
       {
         id: "parent_morning_4",
+        category: "parent_morning_check_in",
+        variant: "parent_observation",
+        source: "library",
         text:
           "Is there anything about your child's tech use so far today " +
           "that you are wondering about?",
@@ -465,19 +477,31 @@ function getPromptBank() {
     child_afternoon: [
       {
         id: "child_afternoon_1",
+        category: "child_afternoon_check_in",
+        variant: "emotion_check",
+        source: "library",
         text: "How are you feeling about your screen time today?",
       },
       {
         id: "child_afternoon_2",
+        category: "child_afternoon_check_in",
+        variant: "positive_or_frustrating",
+        source: "library",
         text: "Has anything online felt fun or frustrating today?",
       },
       {
         id: "child_afternoon_3",
+        category: "child_afternoon_check_in",
+        variant: "activity_reflection",
+        source: "library",
         text:
           "What kind of screen activity has stood out to you today?",
       },
       {
         id: "child_afternoon_4",
+        category: "child_afternoon_check_in",
+        variant: "open_reflection",
+        source: "library",
         text:
           "What is something interesting, fun, or annoying that " +
           "happened online today?",
@@ -487,24 +511,36 @@ function getPromptBank() {
     parent_evening: [
       {
         id: "parent_evening_1",
+        category: "parent_evening_reflection",
+        variant: "general_observation",
+        source: "library",
         text:
           "Did you notice anything about your child's technology use " +
           "today?",
       },
       {
         id: "parent_evening_2",
+        category: "parent_evening_reflection",
+        variant: "engaged_or_frustrated",
+        source: "library",
         text:
           "Was there a moment today when your child seemed engaged " +
           "or frustrated with screens?",
       },
       {
         id: "parent_evening_3",
+        category: "parent_evening_reflection",
+        variant: "parent_reflection",
+        source: "library",
         text:
           "Did anything about today's tech use stand out to you as " +
           "a parent?",
       },
       {
         id: "parent_evening_4",
+        category: "parent_evening_reflection",
+        variant: "positive_or_challenging",
+        source: "library",
         text:
           "Did you notice anything positive or challenging about " +
           "your child's screen time today?",
@@ -514,23 +550,35 @@ function getPromptBank() {
     child_night: [
       {
         id: "child_night_1",
+        category: "child_night_reflection",
+        variant: "good_or_difficult",
+        source: "library",
         text:
           "What was one good or difficult thing about your screen " +
           "time today?",
       },
       {
         id: "child_night_2",
+        category: "child_night_reflection",
+        variant: "most_interesting",
+        source: "library",
         text:
           "What was the most interesting thing you did online today?",
       },
       {
         id: "child_night_3",
+        category: "child_night_reflection",
+        variant: "emotion_reflection",
+        source: "library",
         text:
           "Was there anything online today that made you feel really " +
           "good or not so good?",
       },
       {
         id: "child_night_4",
+        category: "child_night_reflection",
+        variant: "remember_or_talk",
+        source: "library",
         text:
           "What is one thing about your screen time today that you " +
           "want to remember or talk about?",
@@ -720,6 +768,10 @@ exports.generateDailyNudges = functions
               deliveryWindow,
           );
 
+          let finalPrompt = selectedPrompt.text;
+          let finalPromptCategory = selectedPrompt.category;
+          let promptGenerationMode = "library";
+
           if (role === "parent" && deliveryWindow === "parent_evening") {
             try {
               const childData = await getLatestChildResponse(familyId);
@@ -730,14 +782,21 @@ exports.generateDailyNudges = functions
                 );
 
                 if (result && result.parentPrompt) {
-                  selectedPrompt = {
-                    id: "parent_evening_llm",
-                    text: result.parentPrompt,
-                  };
+                  finalPrompt = result.parentPrompt;
+                  promptGenerationMode = "llm_context";
+                  if (result.contextType === "positive") {
+                    finalPromptCategory = "parent_evening_context_positive";
+                  } else if (result.contextType === "challenging") {
+                    finalPromptCategory = "parent_evening_context_challenging";
+                  } else {
+                    finalPromptCategory = "parent_evening_context_neutral";
+                  }
 
                   console.log(
                       "Using LLM parent prompt:",
-                      result.parentPrompt,
+                      finalPrompt,
+                      "category:",
+                      finalPromptCategory,
                   );
                 }
               }
@@ -776,15 +835,28 @@ exports.generateDailyNudges = functions
               .doc(familyId)
               .collection("nudges")
               .add({
-                prompt: selectedPrompt.text,
-                promptText: selectedPrompt.text,
+                prompt: finalPrompt,
+                promptText: finalPrompt,
                 promptId: selectedPrompt.id,
+                promptCategory: finalPromptCategory,
+                promptVariant: selectedPrompt.variant,
+                promptSource: selectedPrompt.source,
+                promptGenerationMode: promptGenerationMode,
                 targetAccountId: account.id,
                 targetRole: role,
                 nudgeType: nudgeType,
                 deliveryWindow: deliveryWindow,
                 dateKey: dateKey,
                 status: "pending",
+
+                notificationStatus: "not_sent",
+                notificationSentAt: null,
+                openedAt: null,
+                answeredAt: null,
+                ignoredAt: null,
+                responseLatencySeconds: null,
+                openLatencySeconds: null,
+
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
                 scheduledFor: admin.firestore.FieldValue.serverTimestamp(),
               });
@@ -843,6 +915,8 @@ exports.generateTestNudges = functions
           }
 
           let finalPrompt = selectedPrompt.text;
+          let finalPromptCategory = selectedPrompt.category;
+          let promptGenerationMode = "library";
 
           if (role === "parent" && deliveryWindow === "parent_evening") {
             try {
@@ -855,9 +929,20 @@ exports.generateTestNudges = functions
 
                 if (result && result.parentPrompt) {
                   finalPrompt = result.parentPrompt;
+                  promptGenerationMode = "llm_context";
+
+                  if (result.contextType === "positive") {
+                    finalPromptCategory = "parent_evening_context_positive";
+                  } else if (result.contextType === "challenging") {
+                    finalPromptCategory = "parent_evening_context_challenging";
+                  } else if (result.contextType === "neutral") {
+                    finalPromptCategory = "parent_evening_context_neutral";
+                  }
                   console.log(
                       "Using LLM parent test prompt:",
                       finalPrompt,
+                      "category:",
+                      finalPromptCategory,
                   );
                 }
               }
@@ -894,12 +979,25 @@ exports.generateTestNudges = functions
                 prompt: finalPrompt,
                 promptText: finalPrompt,
                 promptId: selectedPrompt.id,
+                promptCategory: finalPromptCategory,
+                promptVariant: selectedPrompt.variant,
+                promptSource: selectedPrompt.source,
+                promptGenerationMode: promptGenerationMode,
                 targetAccountId: account.id,
                 targetRole: role,
                 nudgeType: nudgeType,
                 deliveryWindow: deliveryWindow,
                 dateKey: dateKey,
                 status: "pending",
+
+                notificationStatus: "not_sent",
+                notificationSentAt: null,
+                openedAt: null,
+                answeredAt: null,
+                ignoredAt: null,
+                responseLatencySeconds: null,
+                openLatencySeconds: null,
+
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
                 scheduledFor: admin.firestore.FieldValue.serverTimestamp(),
               });
@@ -916,6 +1014,7 @@ exports.sendNudgeNotification = functions.firestore
       const nudge = snap.data();
 
       const familyId = context.params.familyId;
+      const nudgeId = context.params.nudgeId;
       const targetAccountId = nudge.targetAccountId;
       const prompt = nudge.prompt;
 
@@ -959,8 +1058,53 @@ exports.sendNudgeNotification = functions.firestore
           },
           accessToken,
       );
+      await db
+          .collection("families")
+          .doc(familyId)
+          .collection("nudges")
+          .doc(nudgeId)
+          .update({
+            notificationStatus: "sent",
+            notificationSentAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
 
       console.log("Notification sent for nudge:", context.params.nudgeId);
 
       return null;
     });
+exports.markIgnoredNudges = functions.https.onRequest(async (req, res) => {
+  const db = admin.firestore();
+
+  try {
+    const cutoffMs = Date.now() - (10 * 60 * 1000);
+    const cutoffDate = new Date(cutoffMs);
+
+    const snap = await db
+        .collectionGroup("nudges")
+        .where("status", "==", "pending")
+        .where("notificationStatus", "==", "sent")
+        .where("notificationSentAt", "<=", cutoffDate)
+        .get();
+
+    if (snap.empty) {
+      res.status(200).send("No ignored nudges to mark.");
+      return;
+    }
+
+    const batch = db.batch();
+
+    snap.docs.forEach((doc) => {
+      batch.update(doc.ref, {
+        notificationStatus: "ignored",
+        ignoredAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    });
+
+    await batch.commit();
+
+    res.status(200).send(`Marked ${snap.size} nudges as ignored.`);
+  } catch (error) {
+    console.error("markIgnoredNudges failed:", error);
+    res.status(500).send("Error marking ignored nudges.");
+  }
+});

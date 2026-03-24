@@ -21,6 +21,48 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
   final Map<String, TextEditingController> _controllers = {};
   final Map<String, bool> _shareWithParent = {};
 
+  Future<void> _markNudgeOpened(String familyId, String nudgeId) async {
+    final nudgeRef = FirebaseFirestore.instance
+        .collection('families')
+        .doc(familyId)
+        .collection('nudges')
+        .doc(nudgeId);
+
+    final snap = await nudgeRef.get();
+
+    if (!snap.exists) return;
+
+    final data = snap.data();
+    if (data == null) return;
+
+    final openedAt = data['openedAt'];
+    final notificationStatus = data['notificationStatus'];
+
+    if (openedAt != null ||
+        notificationStatus == 'opened' ||
+        notificationStatus == 'answered') {
+      return;
+    }
+
+    final sentAt = data['notificationSentAt'];
+    final now = Timestamp.now();
+
+    int? openLatencySeconds;
+
+    if (sentAt is Timestamp) {
+      openLatencySeconds = now.seconds - sentAt.seconds;
+      if (openLatencySeconds < 0) {
+        openLatencySeconds = 0;
+      }
+    }
+
+    await nudgeRef.update({
+      'notificationStatus': 'opened',
+      'openedAt': FieldValue.serverTimestamp(),
+      'openLatencySeconds': openLatencySeconds,
+    });
+  }
+
   // ✅ Filters (same as parent screen)
   bool _showUnanswered = true; // pending
   bool _showAnswered = false; // answered
@@ -258,6 +300,12 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
     final data = doc.data();
+    final nudgeId = doc.id;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _markNudgeOpened(widget.familyId, nudgeId);
+    });
+
     final prompt = (data['prompt'] ?? '') as String;
 
     final ctrl = _controllers.putIfAbsent(doc.id, () => TextEditingController());
@@ -276,11 +324,26 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
 
         final share = _shareWithParent[doc.id] ?? true;
 
+        final data = doc.data();
+        final sentAt = data['notificationSentAt'];
+        final now = Timestamp.now();
+
+        int? responseLatencySeconds;
+
+        if (sentAt is Timestamp) {
+          responseLatencySeconds = now.seconds - sentAt.seconds;
+          if (responseLatencySeconds < 0) {
+            responseLatencySeconds = 0;
+          }
+        }
+
         await doc.reference.update({
           'status': 'answered',
+          'notificationStatus': 'answered',
           'shareWithParent': share,
           'response': {'text': answer},
           'answeredAt': FieldValue.serverTimestamp(),
+          'responseLatencySeconds': responseLatencySeconds,
         });
 
         if (!mounted) return;

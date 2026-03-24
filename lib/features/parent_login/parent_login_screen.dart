@@ -20,6 +20,46 @@ class ParentLoginScreen extends StatefulWidget {
 class _ParentLoginScreenState extends State<ParentLoginScreen> {
   final Map<String, TextEditingController> _controllers = {};
 
+  Future<void> _markNudgeOpened(String familyId, String nudgeId) async {
+    final nudgeRef = FirebaseFirestore.instance
+        .collection('families')
+        .doc(familyId)
+        .collection('nudges')
+        .doc(nudgeId);
+
+    final snap = await nudgeRef.get();
+
+    if (!snap.exists) return;
+
+    final data = snap.data();
+    if (data == null) return;
+
+    final openedAt = data['openedAt'];
+    final notificationStatus = data['notificationStatus'];
+
+    if (openedAt != null || notificationStatus == 'opened' || notificationStatus == 'answered') {
+      return;
+    }
+
+    final sentAt = data['notificationSentAt'];
+    final now = Timestamp.now();
+
+    int? openLatencySeconds;
+
+    if (sentAt is Timestamp) {
+      openLatencySeconds = now.seconds - sentAt.seconds;
+      if (openLatencySeconds < 0) {
+        openLatencySeconds = 0;
+      }
+    }
+
+    await nudgeRef.update({
+      'notificationStatus': 'opened',
+      'openedAt': FieldValue.serverTimestamp(),
+      'openLatencySeconds': openLatencySeconds,
+    });
+  }
+
   // ✅ Tab toggle
   bool _showChildNudges = false;
 
@@ -306,6 +346,12 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
     final data = doc.data();
+    final nudgeId = doc.id;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _markNudgeOpened(widget.familyId, nudgeId);
+    });
+
     final prompt = (data['prompt'] ?? '') as String;
     final createdLabel = _labelFromScheduledFor(data);
 
@@ -319,10 +365,25 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         final answer = ctrl.text.trim();
         if (answer.isEmpty) return;
 
+        final data = doc.data();
+        final sentAt = data['notificationSentAt'];
+        final now = Timestamp.now();
+
+        int? responseLatencySeconds;
+
+        if (sentAt is Timestamp) {
+          responseLatencySeconds = now.seconds - sentAt.seconds;
+          if (responseLatencySeconds < 0) {
+            responseLatencySeconds = 0;
+          }
+        }
+
         await doc.reference.update({
           'status': 'answered',
+          'notificationStatus': 'answered',
           'response': {'text': answer},
           'answeredAt': FieldValue.serverTimestamp(),
+          'responseLatencySeconds': responseLatencySeconds,
         });
 
         if (!mounted) return;

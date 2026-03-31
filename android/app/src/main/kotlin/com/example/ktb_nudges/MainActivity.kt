@@ -1,6 +1,7 @@
 package com.example.ktb_nudges
 
 import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import com.amazon.device.messaging.ADM
@@ -17,6 +18,15 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         Log.e("KTB_ADM", "MainActivity onCreate started")
 
+        val isAmazonDevice =
+            Build.MANUFACTURER.equals("Amazon", ignoreCase = true) ||
+            Build.BRAND.equals("Amazon", ignoreCase = true)
+
+        if (!isAmazonDevice) {
+            Log.e("KTB_ADM", "Non-Amazon device detected. Skipping ADM setup.")
+            return
+        }
+
         thread {
             try {
                 val adm = ADM(this)
@@ -28,8 +38,8 @@ class MainActivity : FlutterActivity() {
                 } else {
                     Log.e("KTB_ADM", "Existing ADM registration ID: $registrationId")
                 }
-            } catch (e: Exception) {
-                Log.e("KTB_ADM", "ADM setup failed: ${e.message}", e)
+            } catch (t: Throwable) {
+                Log.e("KTB_ADM", "ADM setup failed: ${t.message}", t)
             }
         }
     }

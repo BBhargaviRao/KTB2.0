@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:io' show Platform;
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:ktb_nudges/features/parent_login/parent_login_screen.dart';
 import 'package:ktb_nudges/features/child_login/child_login_screen.dart';
 
@@ -138,17 +140,61 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
       return;
     }
 
-    await FirebaseFirestore.instance
-        .collection('device_registrations')
-        .doc(uid)
-        .set({
+    String? fcmToken;
+    String? admToken;
+    String? tokenType;
+    String platformName = 'unknown';
+
+    try {
+      if (Platform.isAndroid) {
+        platformName = 'android';
+
+        const admChannel = MethodChannel('ktb_nudges/adm');
+        final possibleAdmToken =
+            await admChannel.invokeMethod<String>('getAdmRegistrationId');
+
+        if (possibleAdmToken != null && possibleAdmToken.isNotEmpty) {
+          admToken = possibleAdmToken;
+          tokenType = 'adm';
+          print('ADM TOKEN FROM FLUTTER: $admToken');
+        } else {
+          fcmToken = await FirebaseMessaging.instance.getToken();
+          tokenType = 'fcm';
+          print('FCM TOKEN FROM HOME SCREEN: $fcmToken');
+        }
+      } else if (Platform.isIOS) {
+        platformName = 'ios';
+        fcmToken = await FirebaseMessaging.instance.getToken();
+        tokenType = 'fcm';
+        print('FCM TOKEN FROM IOS: $fcmToken');
+      }
+    } catch (e) {
+      print('Error while fetching device token: $e');
+    }
+
+    final data = <String, dynamic>{
       'uid': uid,
       'familyId': familyId,
       'accountId': accountId,
       'role': role,
       'displayName': displayName,
       'linkedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+      'platform': platformName,
+      'tokenType': tokenType,
+    };
+
+    if (fcmToken != null && fcmToken.isNotEmpty) {
+      data['fcmToken'] = fcmToken;
+    }
+
+    if (admToken != null && admToken.isNotEmpty) {
+      data['admRegistrationId'] = admToken;
+    }
+
+    await FirebaseFirestore.instance
+        .collection('device_registrations')
+        .doc(uid)
+        .set(data, SetOptions(merge: true));
 
     print('Device registration linked to family/account successfully.');
   }

@@ -44,9 +44,7 @@ exports.testLatestChildResponse = functions.https.onRequest(
           });
         }
 
-        const now = new Date();
-        const startOfDay = new Date(now);
-        startOfDay.setHours(0, 0, 0, 0);
+        const startOfDay = getStartOfLocalDayUtc(new Date());
 
         const nudgesSnap = await admin.firestore()
             .collection("families")
@@ -186,9 +184,7 @@ Return JSON only:
  * @return {Promise<{nudgeId: string, text: ?string}|null>}
  */
 async function getLatestChildResponse(familyId) {
-  const now = new Date();
-  const startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
+  const startOfDay = getStartOfLocalDayUtc(new Date());
 
   const nudgesSnap = await admin.firestore()
       .collection("families")
@@ -300,6 +296,79 @@ Return JSON only:
   return {
     contextType: parsed.contextType || "neutral",
     parentPrompt: parsed.parentPrompt,
+  };
+}
+
+/**
+ * Analyzes a child response and returns emotion + concern info.
+ * @param {string} childText
+ * @return {Promise<{
+*   emotionLabel: string,
+*   emotionEmoji: string,
+*   toneCategory: string,
+*   isConcerning: boolean,
+*   concernReason: string
+* }|null>}
+*/
+async function analyzeChildResponseTone(childText) {
+  if (!childText || !childText.trim()) {
+    return null;
+  }
+
+  const client = new OpenAI({
+    apiKey: openaiApiKey.value(),
+  });
+
+  const response = await client.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "system",
+        content: `
+You analyze a CHILD'S written reflection about their digital experience.
+
+Your job:
+1. detect the main emotion
+2. choose one simple emoji for that emotion
+3. decide whether the response sounds concerning enough that a parent
+  should be gently encouraged to check in
+
+Important:
+- Be careful and conservative
+- "Concerning" does NOT mean every negative feeling
+- Mild frustration, annoyance, boredom, or losing a game is 
+  usually NOT concerning
+- Mark as concerning only if the child sounds significantly distressed,
+ emotionally overwhelmed, unsafe, fearful, hopeless, repeatedly harmed,
+ bullied, threatened, or seriously troubled
+
+Return JSON only in this exact format:
+{
+ "emotionLabel": 
+ "happy | sad | angry | frustrated | worried | calm | excited | neutral",
+ "emotionEmoji": "🙂",
+ "toneCategory": "positive | neutral | negative",
+ "isConcerning": true,
+ "concernReason": "short explanation"
+}
+       `,
+      },
+      {
+        role: "user",
+        content: childText,
+      },
+    ],
+  });
+
+  const raw = response.choices[0].message.content;
+  const parsed = JSON.parse(raw);
+
+  return {
+    emotionLabel: parsed.emotionLabel || "neutral",
+    emotionEmoji: parsed.emotionEmoji || "😐",
+    toneCategory: parsed.toneCategory || "neutral",
+    isConcerning: parsed.isConcerning === true,
+    concernReason: parsed.concernReason || "",
   };
 }
 
@@ -716,15 +785,140 @@ exports.sendAdmTestNotification = functions.https.onRequest(
     },
 );
 
+exports.sendFcmTestNotification = functions.https.onRequest(
+    async (req, res) => {
+      try {
+        const uid = req.query.uid;
+
+        if (!uid) {
+          res.status(400).send("Missing uid query parameter.");
+          return;
+        }
+
+        const db = admin.firestore();
+        const deviceDoc = await db
+            .collection("device_registrations")
+            .doc(uid)
+            .get();
+
+        if (!deviceDoc.exists) {
+          res.status(404).send("No device registration found for that uid.");
+          return;
+        }
+
+        const deviceData = deviceDoc.data();
+        const fcmToken = deviceData.fcmToken;
+
+        if (!fcmToken) {
+          res.status(400).send("This device registration has no fcmToken.");
+          return;
+        }
+
+        const message = {
+          token: fcmToken,
+          notification: {
+            title: "KTB Backend Test",
+            body: "This notification was sent from Firebase Functions.",
+          },
+          data: {
+            click_action: "FLUTTER_NOTIFICATION_CLICK",
+          },
+          android: {
+            priority: "high",
+          },
+        };
+
+        const response = await admin.messaging().send(message);
+
+        res.status(200).send({
+          success: true,
+          uid: uid,
+          fcmMessageId: response,
+        });
+      } catch (error) {
+        console.error("sendFcmTestNotification error:", error);
+        res.status(500).send({
+          success: false,
+          error: error.message,
+        });
+      }
+    },
+);
+
+const APP_TIME_ZONE = "America/Boise";
+
+/**
+ * Gets local date parts in the app timezone.
+ * @param {Date} date
+ * @return {{
+*   year: string,
+*   month: string,
+*   day: string,
+*   hour: number,
+*   dateKey: string
+* }}
+*/
+function getLocalTimeParts(date = new Date()) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hour12: false,
+  });
+
+  const parts = formatter.formatToParts(date);
+  const map = {};
+
+  for (const part of parts) {
+    map[part.type] = part.value;
+  }
+
+  return {
+    year: map.year,
+    month: map.month,
+    day: map.day,
+    hour: Number(map.hour),
+    dateKey: `${map.year}-${map.month}-${map.day}`,
+  };
+}
+
+/**
+ * Returns the start of the local day (midnight) as a UTC Date.
+ * @param {Date} date
+ * @return {Date}
+ */
+function getStartOfLocalDayUtc(date = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIME_ZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(date);
+
+  const map = {};
+  for (const part of parts) {
+    map[part.type] = part.value;
+  }
+
+  const localMidnight = new Date(
+      `${map.year}-${map.month}-${map.day}T00:00:00-06:00`,
+  );
+
+  return localMidnight;
+}
+
 exports.generateDailyNudges = functions
     .runWith({secrets: ["OPENAI_API_KEY"]})
     .pubsub.schedule("every 30 minutes")
-    .timeZone("America/Denver")
+    .timeZone(APP_TIME_ZONE)
     .onRun(async () => {
       const db = admin.firestore();
       const now = new Date();
-      const hour = now.getHours();
-      const dateKey = now.toISOString().split("T")[0];
+      const localParts = getLocalTimeParts(now);
+      const hour = localParts.hour;
+      const dateKey = localParts.dateKey;
 
       const familiesSnapshot = await db.collection("families").get();
 
@@ -745,16 +939,16 @@ exports.generateDailyNudges = functions
           let deliveryWindow = null;
           let selectedPrompt = null;
 
-          if (role === "parent" && hour >= 8 && hour < 11) {
+          if (role === "parent" && hour >= 9 && hour < 12) {
             nudgeType = "check_in";
             deliveryWindow = "parent_morning";
-          } else if (role === "child" && hour >= 13 && hour < 16) {
+          } else if (role === "child" && hour >= 15 && hour < 18) {
             nudgeType = "check_in";
             deliveryWindow = "child_afternoon";
-          } else if (role === "parent" && hour >= 18 && hour < 21) {
+          } else if (role === "parent" && hour >= 19 && hour < 21) {
             nudgeType = "reflection";
             deliveryWindow = "parent_evening";
-          } else if (role === "child" && hour >= 19 && hour < 21) {
+          } else if (role === "child" && hour >= 20 && hour < 21) {
             nudgeType = "reflection";
             deliveryWindow = "child_night";
           } else {
@@ -896,12 +1090,28 @@ exports.generateTestNudges = functions
           const role = data.role;
 
           const now = new Date();
-          const dateKey = now.toISOString().split("T")[0];
+          const localParts = getLocalTimeParts(now);
+          const dateKey = localParts.dateKey;
 
-          const nudgeType = role === "child" ? "check_in" : "reflection";
-          const deliveryWindow =
-            role === "child" ? "child_afternoon" : "parent_evening";
+          const hour = localParts.hour;
+          let nudgeType = null;
+          let deliveryWindow = null;
 
+          if (role === "parent" && hour >= 9 && hour < 12) {
+            nudgeType = "check_in";
+            deliveryWindow = "parent_morning";
+          } else if (role === "child" && hour >= 15 && hour < 18) {
+            nudgeType = "check_in";
+            deliveryWindow = "child_afternoon";
+          } else if (role === "parent" && hour >= 19 && hour < 21) {
+            nudgeType = "reflection";
+            deliveryWindow = "parent_evening";
+          } else if (role === "child" && hour >= 20 && hour < 21) {
+            nudgeType = "reflection";
+            deliveryWindow = "child_night";
+          } else {
+            continue;
+          }
           const selectedPrompt = await pickPromptForAccount(
               db,
               familyId,
@@ -1036,42 +1246,285 @@ exports.sendNudgeNotification = functions.firestore
       }
 
       const deviceData = deviceSnapshot.docs[0].data();
-      const admToken = deviceData.admToken;
+      const tokenType = deviceData.tokenType;
+      const fcmToken = deviceData.fcmToken;
+      const admToken = deviceData.admToken || deviceData.admRegistrationId;
 
-      if (!admToken) {
-        console.log("Device has no ADM token");
-        return null;
-      }
-
-      const accessToken = await getAdmAccessToken();
-
-      await postJson(
-          "https://api.amazon.com/messaging/registrations/" +
-          `${admToken}/messages`,
-          {
-            data: {
+      try {
+        if (tokenType === "fcm" && fcmToken) {
+          await admin.messaging().send({
+            token: fcmToken,
+            notification: {
               title: "New Nudge",
               body: prompt,
             },
-            priority: "high",
-            expiresAfter: 3600,
-          },
-          accessToken,
-      );
-      await db
-          .collection("families")
-          .doc(familyId)
-          .collection("nudges")
-          .doc(nudgeId)
-          .update({
-            notificationStatus: "sent",
-            notificationSentAt: admin.firestore.FieldValue.serverTimestamp(),
+            data: {
+              familyId: familyId,
+              nudgeId: nudgeId,
+              click_action: "FLUTTER_NOTIFICATION_CLICK",
+            },
+            android: {
+              priority: "high",
+            },
           });
 
-      console.log("Notification sent for nudge:", context.params.nudgeId);
+          console.log("FCM notification sent for nudge:", nudgeId);
+        } else if (tokenType === "adm" && admToken) {
+          const accessToken = await getAdmAccessToken();
+
+          await postJson(
+              "https://api.amazon.com/messaging/registrations/" +
+              `${admToken}/messages`,
+              {
+                data: {
+                  title: "New Nudge",
+                  body: prompt,
+                },
+                priority: "high",
+                expiresAfter: 3600,
+              },
+              accessToken,
+          );
+
+          console.log("ADM notification sent for nudge:", nudgeId);
+        } else {
+          console.log("Device has no supported push token");
+          return null;
+        }
+
+        await db
+            .collection("families")
+            .doc(familyId)
+            .collection("nudges")
+            .doc(nudgeId)
+            .update({
+              notificationStatus: "sent",
+              notificationSentAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+      } catch (error) {
+        console.error("sendNudgeNotification error:", error);
+
+        await db
+            .collection("families")
+            .doc(familyId)
+            .collection("nudges")
+            .doc(nudgeId)
+            .update({
+              notificationStatus: "failed",
+              notificationError: error.message,
+            });
+      }
 
       return null;
     });
+
+exports.analyzeAnsweredChildNudge = functions
+    .runWith({secrets: ["OPENAI_API_KEY"]})
+    .firestore
+    .document("families/{familyId}/nudges/{nudgeId}")
+    .onUpdate(async (change, context) => {
+      const before = change.before.data();
+      const after = change.after.data();
+
+      if (!before || !after) {
+        return null;
+      }
+
+      const beforeStatus = before.status;
+      const afterStatus = after.status;
+
+      if (beforeStatus === "answered") {
+        return null;
+      }
+
+      if (afterStatus !== "answered") {
+        return null;
+      }
+
+      if (after.targetRole !== "child") {
+        return null;
+      }
+
+      const responseText = after.response &&
+          after.response.text ? after.response.text.trim() : "";
+
+      if (!responseText) {
+        return null;
+      }
+
+      try {
+        const analysis = await analyzeChildResponseTone(responseText);
+
+        if (!analysis) {
+          return null;
+        }
+
+        await change.after.ref.update({
+          emotionLabel: analysis.emotionLabel,
+          emotionEmoji: analysis.emotionEmoji,
+          toneCategory: analysis.toneCategory,
+          isConcerning: analysis.isConcerning,
+          concernReason: analysis.concernReason,
+          emotionAnalyzedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        console.log(
+            "Child answer analyzed:",
+            context.params.nudgeId,
+            analysis,
+        );
+      } catch (error) {
+        console.error(
+            "analyzeAnsweredChildNudge failed:",
+            context.params.nudgeId,
+            error,
+        );
+
+        await change.after.ref.update({
+          emotionAnalysisError: error.message,
+        });
+      }
+
+      return null;
+    });
+
+exports.sendParentConcernAlert = functions.firestore
+    .document("families/{familyId}/nudges/{nudgeId}")
+    .onUpdate(async (change, context) => {
+      const before = change.before.data();
+      const after = change.after.data();
+
+      if (!before || !after) {
+        return null;
+      }
+
+      if (after.targetRole !== "child") {
+        return null;
+      }
+
+      if (before.isConcerning === true) {
+        return null;
+      }
+
+      if (after.isConcerning !== true) {
+        return null;
+      }
+
+      if (after.concernNotificationSentAt) {
+        return null;
+      }
+
+      const db = admin.firestore();
+      const familyId = context.params.familyId;
+
+      try {
+        const parentAccountsSnap = await db
+            .collection("families")
+            .doc(familyId)
+            .collection("accounts")
+            .where("role", "==", "parent")
+            .get();
+
+        if (parentAccountsSnap.empty) {
+          console.log("No parent accounts found for family:", familyId);
+          return null;
+        }
+
+        let sentCount = 0;
+
+        for (const parentDoc of parentAccountsSnap.docs) {
+          const parentAccountId = parentDoc.id;
+
+          const deviceSnapshot = await db
+              .collection("device_registrations")
+              .where("familyId", "==", familyId)
+              .where("accountId", "==", parentAccountId)
+              .limit(1)
+              .get();
+
+          if (deviceSnapshot.empty) {
+            console.log("No device found for parent:", parentAccountId);
+            continue;
+          }
+
+          const deviceData = deviceSnapshot.docs[0].data();
+          const tokenType = deviceData.tokenType;
+          const fcmToken = deviceData.fcmToken;
+          const admToken = deviceData.admToken ||
+              deviceData.admRegistrationId;
+
+          if (tokenType === "fcm" && fcmToken) {
+            await admin.messaging().send({
+              token: fcmToken,
+              notification: {
+                title: "Child Check-In Alert",
+                body: "Your child may need a gentle check-in.",
+              },
+              data: {
+                familyId: familyId,
+                sourceNudgeId: context.params.nudgeId,
+                type: "concern_alert",
+                click_action: "FLUTTER_NOTIFICATION_CLICK",
+              },
+              android: {
+                priority: "high",
+              },
+            });
+
+            sentCount++;
+          } else if (tokenType === "adm" && admToken) {
+            const accessToken = await getAdmAccessToken();
+
+            await postJson(
+                "https://api.amazon.com/messaging/registrations/" +
+                `${admToken}/messages`,
+                {
+                  data: {
+                    title: "Child Check-In Alert",
+                    body: "Your child may need a gentle check-in.",
+                    type: "concern_alert",
+                    familyId: familyId,
+                    sourceNudgeId: context.params.nudgeId,
+                  },
+                  priority: "high",
+                  expiresAfter: 3600,
+                },
+                accessToken,
+            );
+
+            sentCount++;
+          } else {
+            console.log(
+                "Parent device has no supported push token:",
+                parentAccountId,
+            );
+          }
+        }
+
+        await change.after.ref.update({
+          concernNotificationSentAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+          concernNotificationStatus: sentCount > 0 ? "sent" : "no_device",
+        });
+
+        console.log(
+            "Concern alert processed for nudge:",
+            context.params.nudgeId,
+            "sentCount:",
+            sentCount,
+        );
+      } catch (error) {
+        console.error("sendParentConcernAlert failed:", error);
+
+        await change.after.ref.update({
+          concernNotificationStatus: "failed",
+          concernNotificationError: error.message,
+        });
+      }
+
+      return null;
+    });
+
 exports.markIgnoredNudges = functions.https.onRequest(async (req, res) => {
   const db = admin.firestore();
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ParentLoginScreen extends StatefulWidget {
@@ -37,7 +38,9 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     final openedAt = data['openedAt'];
     final notificationStatus = data['notificationStatus'];
 
-    if (openedAt != null || notificationStatus == 'opened' || notificationStatus == 'answered') {
+    if (openedAt != null ||
+        notificationStatus == 'opened' ||
+        notificationStatus == 'answered') {
       return;
     }
 
@@ -60,42 +63,39 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     });
   }
 
-  // ✅ Tab toggle
   bool _showChildNudges = false;
 
-  // ✅ Parent-only multi-select filters
-  bool _showUnanswered = true; // pending
-  bool _showAnswered = false; // answered
+  bool _showUnanswered = true;
+  bool _showAnswered = false;
 
-  // --- Theme helpers (Parent vs Child view) ---
   List<Color> get _bgColors => _showChildNudges
       ? const [
-          Color(0xFFBFD7FF),
-          Color(0xFFB3CCFF),
-          Color(0xFFA9C3FF),
-          Color(0xFF9FB9FF),
-        ]
-      : const [
           Color(0xFFEFE9FF),
           Color(0xFFF4D7C8),
           Color(0xFFBFA9FF),
           Color(0xFFF0D4C7),
+        ]
+      : const [
+          Color(0xFFBFD7FF),
+          Color(0xFFB3CCFF),
+          Color(0xFFA9C3FF),
+          Color(0xFF9FB9FF),
         ];
 
   List<double> get _bgStops => _showChildNudges
-      ? const [0.0, 0.35, 0.72, 1.0]
-      : const [0.0, 0.38, 0.75, 1.0];
+      ? const [0.0, 0.38, 0.75, 1.0]
+      : const [0.0, 0.35, 0.72, 1.0];
 
   List<Color> get _cardColors => _showChildNudges
       ? const [
-          Color(0xFFD8E3FF),
-          Color(0xFFB9C8FF),
-          Color(0xFF8FA6FF),
-        ]
-      : const [
           Color(0xFF9E7BFF),
           Color(0xFFE6A46A),
           Color(0xFFF2C894),
+        ]
+      : const [
+          Color(0xFFD8E3FF),
+          Color(0xFFB9C8FF),
+          Color(0xFF8FA6FF),
         ];
 
   List<double> get _cardStops =>
@@ -135,7 +135,6 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         .snapshots();
   }
 
-  // ---------- Filters UI (pill + dropdown) ----------
   void _openParentFiltersSheet() {
     showModalBottomSheet(
       context: context,
@@ -179,7 +178,6 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
-
                   CheckboxListTile(
                     value: tempUnanswered,
                     onChanged: (v) =>
@@ -222,7 +220,6 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                     ),
                     contentPadding: EdgeInsets.zero,
                   ),
-
                   const SizedBox(height: 6),
                   SizedBox(
                     width: double.infinity,
@@ -315,15 +312,39 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     super.dispose();
   }
 
-  String _labelFromScheduledFor(Map<String, dynamic> data) {
-    String createdLabel = '';
-    final ts = data['scheduledFor'];
-    if (ts is Timestamp) {
-      final dt = ts.toDate();
-      createdLabel =
-          '${dt.month}/${dt.day}/${dt.year}  ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}';
+  String _ordinal(int day) {
+    if (day >= 11 && day <= 13) return '${day}th';
+    switch (day % 10) {
+      case 1:
+        return '${day}st';
+      case 2:
+        return '${day}nd';
+      case 3:
+        return '${day}rd';
+      default:
+        return '${day}th';
     }
-    return createdLabel;
+  }
+
+  String _formatScheduledLabel(DateTime dt) {
+    final weekday = DateFormat('EEEE').format(dt);
+    final month = DateFormat('MMM').format(dt);
+    final year = DateFormat('yyyy').format(dt);
+    final time = DateFormat('h:mma').format(dt).toLowerCase();
+
+    return '$weekday, ${_ordinal(dt.day)} $month $year, $time';
+  }
+
+  String? _relativeDayTag(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final target = DateTime(dt.year, dt.month, dt.day);
+
+    final diff = today.difference(target).inDays;
+
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Yesterday';
+    return null;
   }
 
   DateTime _scheduledForAsDate(Map<String, dynamic> data) {
@@ -341,7 +362,6 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     return null;
   }
 
-  // ---------- card builders ----------
   Widget _buildParentPendingCardFromDoc(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -353,13 +373,16 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     });
 
     final prompt = (data['prompt'] ?? '') as String;
-    final createdLabel = _labelFromScheduledFor(data);
+    final scheduledAt = _scheduledForAsDate(data);
+    final createdLabel = _formatScheduledLabel(scheduledAt);
+    final dayTag = _relativeDayTag(scheduledAt);
 
     final ctrl = _controllers.putIfAbsent(doc.id, () => TextEditingController());
 
     return _NudgeCard(
       question: prompt,
       createdAtLabel: createdLabel,
+      dayTag: dayTag,
       controller: ctrl,
       onSave: () async {
         final answer = ctrl.text.trim();
@@ -387,16 +410,12 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         });
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Saved')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Saved')));
       },
-      cardColors: const [
-        Color(0xFF9E7BFF),
-        Color(0xFFE6A46A),
-        Color(0xFFF2C894),
-      ],
-      cardStops: const [0.0, 0.6, 1.0],
+      cardColors: _cardColors,
+      cardStops: _cardStops,
     );
   }
 
@@ -405,20 +424,16 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
   ) {
     final data = doc.data();
     final prompt = (data['prompt'] ?? '') as String;
-    final createdLabel = _labelFromScheduledFor(data);
+    final scheduledAt = _scheduledForAsDate(data);
+    final createdLabel = _formatScheduledLabel(scheduledAt);
+    final dayTag = _relativeDayTag(scheduledAt);
     final answerText = _extractResponseText(data);
 
     return _ReadOnlyAnswerCard(
       question: prompt,
       createdAtLabel: createdLabel,
+      dayTag: dayTag,
       answerText: answerText,
-      headerLine: 'Answered ✅',
-      cardColors: const [
-        Color(0xFF9E7BFF),
-        Color(0xFFE6A46A),
-        Color(0xFFF2C894),
-      ],
-      cardStops: const [0.0, 0.6, 1.0],
     );
   }
 
@@ -427,7 +442,9 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
   ) {
     final data = doc.data();
     final prompt = (data['prompt'] ?? '') as String;
-    final createdLabel = _labelFromScheduledFor(data);
+    final scheduledAt = _scheduledForAsDate(data);
+    final createdLabel = _formatScheduledLabel(scheduledAt);
+    final dayTag = _relativeDayTag(scheduledAt);
 
     final status = (data['status'] ?? '') as String;
     final shareWithParent = data['shareWithParent'] == true;
@@ -446,14 +463,16 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     } else if (answerToShow == null) {
       privacyLine = 'Shared, but no answer text found.';
     } else {
-      privacyLine = 'Shared by child ✅';
+      privacyLine = 'Shared by child';
     }
 
     return _ReadOnlyNudgeCard(
       question: prompt,
       createdAtLabel: createdLabel,
+      dayTag: dayTag,
       answerText: answerToShow,
       privacyLine: privacyLine,
+      emotionEmoji: data['emotionEmoji'] as String?,
       cardColors: _cardColors,
       cardStops: _cardStops,
     );
@@ -500,7 +519,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
               SliverToBoxAdapter(
                 child: Center(
                   child: Text(
-                    'Welcome ${widget.parentName}',
+                    'Welcome ${widget.parentName},',
                     textAlign: TextAlign.center,
                     style: const TextStyle(
                       fontFamily: 'InstrumentSerif',
@@ -516,8 +535,10 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
               SliverToBoxAdapter(
                 child: Center(
                   child: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
                       color: Colors.white.withOpacity(0.45),
                       borderRadius: BorderRadius.circular(999),
@@ -564,7 +585,6 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
               const SliverToBoxAdapter(child: SizedBox(height: 12)),
               SliverToBoxAdapter(child: _parentFiltersPill()),
               const SliverToBoxAdapter(child: SizedBox(height: 18)),
-
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 18),
                 sliver: SliverToBoxAdapter(
@@ -771,7 +791,6 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                   ),
                 ),
               ),
-
               const SliverToBoxAdapter(child: SizedBox(height: 22)),
             ],
           ),
@@ -781,9 +800,37 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
   }
 }
 
+class _DayTagPill extends StatelessWidget {
+  final String label;
+
+  const _DayTagPill({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.72),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.black.withOpacity(0.08)),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          fontFamily: 'PlusJakartaSans',
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: Colors.black,
+        ),
+      ),
+    );
+  }
+}
+
 class _NudgeCard extends StatelessWidget {
   final String question;
   final String createdAtLabel;
+  final String? dayTag;
   final TextEditingController controller;
   final VoidCallback onSave;
 
@@ -793,6 +840,7 @@ class _NudgeCard extends StatelessWidget {
   const _NudgeCard({
     required this.question,
     required this.createdAtLabel,
+    required this.dayTag,
     required this.controller,
     required this.onSave,
     required this.cardColors,
@@ -839,32 +887,32 @@ class _NudgeCard extends StatelessWidget {
             ),
           ),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.38),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: Text(
-                  question,
-                  textAlign: TextAlign.center,
-                  style: _qaStyle, // ✅ PlusJakartaSans italic 400
-                ),
+              Align(
+                alignment: Alignment.topRight,
+                child: dayTag == null
+                    ? const SizedBox.shrink()
+                    : _DayTagPill(label: dayTag!),
+              ),
+              if (dayTag != null) const SizedBox(height: 10),
+              Text(
+                question,
+                textAlign: TextAlign.left,
+                style: _qaStyle,
               ),
               const SizedBox(height: 16),
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.38),
+                  color: Colors.white.withOpacity(0.32),
                   borderRadius: BorderRadius.circular(22),
                 ),
                 child: TextField(
                   controller: controller,
                   maxLines: 6,
-                  style: _answerStyle, // ✅ typed answer matches question font
+                  style: _answerStyle,
                   decoration: const InputDecoration(
                     hintText: 'Type here...',
                     hintStyle: TextStyle(
@@ -875,44 +923,60 @@ class _NudgeCard extends StatelessWidget {
                       color: Colors.black54,
                     ),
                     border: InputBorder.none,
+                    isCollapsed: true,
                   ),
                 ),
               ),
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,
-                child: ElevatedButton(
-                  onPressed: onSave,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.white.withOpacity(0.55),
-                    foregroundColor: Colors.black,
-                    elevation: 6,
-                    shadowColor: Colors.black.withOpacity(0.20),
-                    padding: const EdgeInsets.symmetric(vertical: 18),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(999),
-                    ),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(999),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.25),
+                        offset: const Offset(0, 5),
+                        blurRadius: 4,
+                        spreadRadius: 0,
+                      ),
+                    ],
                   ),
-                  child: const Text(
-                    'SAVE',
-                    style: TextStyle(
-                      fontFamily: 'PlusJakartaSans',
-                      fontSize: 18,
-                      fontWeight: FontWeight.w500,
-                      letterSpacing: 0.6,
+                  child: ElevatedButton(
+                    onPressed: onSave,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.white.withOpacity(0.55),
+                      foregroundColor: Colors.black,
+                      elevation: 0, // IMPORTANT
+                      padding: const EdgeInsets.symmetric(vertical: 18),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                    ),
+                    child: const Text(
+                      'SAVE',
+                      style: TextStyle(
+                        fontFamily: 'PlusJakartaSans',
+                        fontSize: 18,
+                        fontStyle: FontStyle.italic,
+                        fontWeight: FontWeight.w500,
+                        letterSpacing: 0.6,
+                      ),
                     ),
                   ),
                 ),
               ),
               const SizedBox(height: 10),
-              Text(
-                createdAtLabel,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontFamily: 'InstrumentSerif',
-                  fontSize: 14,
-                  fontStyle: FontStyle.italic,
-                  color: Colors.black.withOpacity(0.65),
+              Center(
+                child: Text(
+                  createdAtLabel,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'InstrumentSerif',
+                    fontSize: 14,
+                    fontStyle: FontStyle.italic,
+                    color: Colors.black.withOpacity(0.65),
+                  ),
                 ),
               ),
             ],
@@ -926,8 +990,10 @@ class _NudgeCard extends StatelessWidget {
 class _ReadOnlyNudgeCard extends StatelessWidget {
   final String question;
   final String createdAtLabel;
+  final String? dayTag;
   final String? answerText;
   final String privacyLine;
+  final String? emotionEmoji;
 
   final List<Color> cardColors;
   final List<double> cardStops;
@@ -935,8 +1001,10 @@ class _ReadOnlyNudgeCard extends StatelessWidget {
   const _ReadOnlyNudgeCard({
     required this.question,
     required this.createdAtLabel,
+    required this.dayTag,
     required this.answerText,
     required this.privacyLine,
+    required this.emotionEmoji,
     required this.cardColors,
     required this.cardStops,
   });
@@ -981,59 +1049,62 @@ class _ReadOnlyNudgeCard extends StatelessWidget {
             ),
           ),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.38),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: Text(
-                  question,
-                  textAlign: TextAlign.center,
-                  style: _qaStyle, // ✅ updated
-                ),
+              Align(
+                alignment: Alignment.topRight,
+                child: dayTag == null
+                    ? const SizedBox.shrink()
+                    : _DayTagPill(label: dayTag!),
               ),
-              const SizedBox(height: 14),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.38),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      privacyLine,
-                      style: TextStyle(
-                        fontFamily: 'PlusJakartaSans',
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.black.withOpacity(0.70),
-                      ),
+              if (dayTag != null) const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(
+                    child: Text(
+                      question,
+                      textAlign: TextAlign.left,
+                      style: _qaStyle,
                     ),
-                    if (answerText != null) ...[
-                      const SizedBox(height: 10),
-                      Text(
-                        answerText!,
-                        style: _answerStyle, // ✅ updated
-                      ),
-                    ],
+                  ),
+                  if (emotionEmoji != null && emotionEmoji!.isNotEmpty) ...[
+                    const SizedBox(width: 10),
+                    Text(
+                      emotionEmoji!,
+                      style: const TextStyle(fontSize: 28),
+                    ),
                   ],
-                ),
+                ],
               ),
               const SizedBox(height: 12),
               Text(
-                createdAtLabel,
-                textAlign: TextAlign.center,
+                privacyLine,
                 style: TextStyle(
-                  fontFamily: 'InstrumentSerif',
-                  fontSize: 14,
-                  fontStyle: FontStyle.italic,
-                  color: Colors.black.withOpacity(0.65),
+                  fontFamily: 'PlusJakartaSans',
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.black.withOpacity(0.70),
+                ),
+              ),
+              if (answerText != null) ...[
+                const SizedBox(height: 10),
+                Text(
+                  answerText!,
+                  style: _answerStyle,
+                ),
+              ],
+              const SizedBox(height: 12),
+              Center(
+                child: Text(
+                  createdAtLabel,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'InstrumentSerif',
+                    fontSize: 14,
+                    fontStyle: FontStyle.italic,
+                    color: Colors.black.withOpacity(0.65),
+                  ),
                 ),
               ),
             ],
@@ -1047,19 +1118,14 @@ class _ReadOnlyNudgeCard extends StatelessWidget {
 class _ReadOnlyAnswerCard extends StatelessWidget {
   final String question;
   final String createdAtLabel;
+  final String? dayTag;
   final String? answerText;
-  final String headerLine;
-
-  final List<Color> cardColors;
-  final List<double> cardStops;
 
   const _ReadOnlyAnswerCard({
     required this.question,
     required this.createdAtLabel,
+    required this.dayTag,
     required this.answerText,
-    required this.headerLine,
-    required this.cardColors,
-    required this.cardStops,
   });
 
   static const TextStyle _qaStyle = TextStyle(
@@ -1089,70 +1155,67 @@ class _ReadOnlyAnswerCard extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
           decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.44),
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: Colors.black.withOpacity(0.12),
+              color: Colors.black.withOpacity(0.10),
               width: 1.0,
-            ),
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: cardColors,
-              stops: cardStops,
             ),
           ),
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.38),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: Text(
-                  question,
-                  textAlign: TextAlign.center,
-                  style: _qaStyle, // ✅ updated
-                ),
+              Align(
+                alignment: Alignment.topRight,
+                child: dayTag == null
+                    ? const SizedBox.shrink()
+                    : _DayTagPill(label: dayTag!),
+              ),
+              if (dayTag != null) const SizedBox(height: 10),
+              Text(
+                question,
+                textAlign: TextAlign.left,
+                style: _qaStyle,
               ),
               const SizedBox(height: 14),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.38),
-                  borderRadius: BorderRadius.circular(22),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      headerLine,
-                      style: TextStyle(
-                        fontFamily: 'PlusJakartaSans',
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.black.withOpacity(0.75),
-                      ),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Answer ',
+                    style: TextStyle(
+                      fontFamily: 'PlusJakartaSans',
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.black,
                     ),
-                    const SizedBox(height: 10),
-                    Text(
-                      answerText ?? '(No answer text found)',
-                      style: _answerStyle, // ✅ updated
+                  ),
+                  const Text(
+                    '✓',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.green,
                     ),
-                  ],
-                ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                answerText ?? '(No answer text found)',
+                style: _answerStyle,
               ),
               const SizedBox(height: 12),
-              Text(
-                createdAtLabel,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontFamily: 'InstrumentSerif',
-                  fontSize: 14,
-                  fontStyle: FontStyle.italic,
-                  color: Colors.black.withOpacity(0.65),
+              Center(
+                child: Text(
+                  createdAtLabel,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontFamily: 'InstrumentSerif',
+                    fontSize: 14,
+                    fontStyle: FontStyle.italic,
+                    color: Colors.black.withOpacity(0.65),
+                  ),
                 ),
               ),
             ],

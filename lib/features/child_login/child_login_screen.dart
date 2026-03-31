@@ -63,11 +63,9 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     });
   }
 
-  // ✅ Filters (same as parent screen)
-  bool _showUnanswered = true; // pending
-  bool _showAnswered = false; // answered
+  bool _showUnanswered = true;
+  bool _showAnswered = false;
 
-  // ✅ Streams (pending + answered)
   Stream<QuerySnapshot<Map<String, dynamic>>> _pendingChildNudgesStream() {
     return FirebaseFirestore.instance
         .collection('families')
@@ -76,7 +74,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
         .where('targetRole', isEqualTo: 'child')
         .where('targetAccountId', isEqualTo: widget.childAccountId)
         .where('status', isEqualTo: 'pending')
-        .orderBy('scheduledFor', descending: true) // ✅ latest on top
+        .orderBy('scheduledFor', descending: true)
         .snapshots();
   }
 
@@ -88,11 +86,10 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
         .where('targetRole', isEqualTo: 'child')
         .where('targetAccountId', isEqualTo: widget.childAccountId)
         .where('status', isEqualTo: 'answered')
-        .orderBy('scheduledFor', descending: true) // ✅ latest on top
+        .orderBy('scheduledFor', descending: true)
         .snapshots();
   }
 
-  // ---------- Filters UI (pill + bottom sheet) ----------
   void _openChildFiltersSheet() {
     showModalBottomSheet(
       context: context,
@@ -136,7 +133,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 10),
-
                   CheckboxListTile(
                     value: tempUnanswered,
                     onChanged: (v) =>
@@ -179,7 +175,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                     ),
                     contentPadding: EdgeInsets.zero,
                   ),
-
                   const SizedBox(height: 6),
                   SizedBox(
                     width: double.infinity,
@@ -262,7 +257,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     );
   }
 
-  // ---------- helpers ----------
   @override
   void dispose() {
     for (final c in _controllers.values) {
@@ -295,7 +289,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     return null;
   }
 
-  // ---------- card builders ----------
   Widget _buildChildPendingNudgeCardFromDoc(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -374,7 +367,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     );
   }
 
-  // ---------- UI ----------
   @override
   Widget build(BuildContext context) {
     final showPending = _showUnanswered;
@@ -389,34 +381,17 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
             colors: [
-              Color(0xFFBFD7FF),
-              Color(0xFFB3CCFF),
-              Color(0xFFA9C3FF),
-              Color(0xFF9FB9FF),
+              Color(0xFFEFE9FF),
+              Color(0xFFF4D7C8),
+              Color(0xFFBFA9FF),
+              Color(0xFFF0D4C7),
             ],
-            stops: [0.0, 0.35, 0.72, 1.0],
+            stops: [0.0, 0.38, 0.75, 1.0],
           ),
         ),
         child: SafeArea(
           child: CustomScrollView(
             slivers: [
-              const SliverToBoxAdapter(
-                child: Padding(
-                  padding: EdgeInsets.fromLTRB(16, 6, 16, 0),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Child Login',
-                      style: TextStyle(
-                        fontFamily: 'PlusJakartaSans',
-                        fontSize: 18,
-                        fontWeight: FontWeight.w500,
-                        color: Color(0xFF4EA4FF),
-                      ),
-                    ),
-                  ),
-                ),
-              ),
               const SliverToBoxAdapter(child: SizedBox(height: 26)),
               const SliverToBoxAdapter(
                 child: Center(
@@ -450,19 +425,14 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                   ),
                 ),
               ),
-
-              // ✅ Filters pill (same behavior as parent)
               const SliverToBoxAdapter(child: SizedBox(height: 14)),
               SliverToBoxAdapter(child: _childFiltersPill()),
               const SliverToBoxAdapter(child: SizedBox(height: 18)),
-
-              // ✅ Cards list (Firestore)
               SliverPadding(
                 padding: const EdgeInsets.symmetric(horizontal: 18),
                 sliver: SliverToBoxAdapter(
                   child: Builder(
                     builder: (context) {
-                      // no filters selected
                       if (!showPending && !showAnswered) {
                         return const Center(
                           child: Padding(
@@ -472,7 +442,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                         );
                       }
 
-                      // only pending
                       if (showPending && !showAnswered) {
                         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                           stream: _pendingChildNudgesStream(),
@@ -513,7 +482,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                         );
                       }
 
-                      // only answered
                       if (!showPending && showAnswered) {
                         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                           stream: _answeredChildNudgesStream(),
@@ -554,7 +522,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                         );
                       }
 
-                      // BOTH selected -> merge + sort locally (latest on top)
                       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
                         stream: _pendingChildNudgesStream(),
                         builder: (context, pendingSnap) {
@@ -596,7 +563,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                               ]..sort((a, b) {
                                   final adt = _scheduledForAsDate(a.data());
                                   final bdt = _scheduledForAsDate(b.data());
-                                  return bdt.compareTo(adt); // desc
+                                  return bdt.compareTo(adt);
                                 });
 
                               if (all.isEmpty) {
@@ -631,7 +598,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                   ),
                 ),
               ),
-
               const SliverToBoxAdapter(child: SizedBox(height: 22)),
             ],
           ),
@@ -644,10 +610,8 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
 class _ChildNudgeCard extends StatelessWidget {
   final String question;
   final TextEditingController controller;
-
   final bool shareWithParent;
   final ValueChanged<bool> onShareChanged;
-
   final VoidCallback onSave;
 
   const _ChildNudgeCard({
@@ -658,7 +622,6 @@ class _ChildNudgeCard extends StatelessWidget {
     required this.onSave,
   });
 
-  // ✅ Font change you mentioned: question + typed answer = PlusJakartaSans italic 400
   static const TextStyle _qaStyle = TextStyle(
     fontFamily: 'PlusJakartaSans',
     fontSize: 24,
@@ -695,16 +658,15 @@ class _ChildNudgeCard extends StatelessWidget {
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [
-                Color(0xFFD8E3FF),
-                Color(0xFFB9C8FF),
-                Color(0xFF8FA6FF),
+                Color(0xFF9E7BFF),
+                Color(0xFFE6A46A),
+                Color(0xFFF2C894),
               ],
-              stops: [0.0, 0.55, 1.0],
+              stops: [0.0, 0.6, 1.0],
             ),
           ),
           child: Column(
             children: [
-              // Question pill
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
@@ -718,10 +680,7 @@ class _ChildNudgeCard extends StatelessWidget {
                   style: _qaStyle,
                 ),
               ),
-
               const SizedBox(height: 16),
-
-              // Response box
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
@@ -732,7 +691,7 @@ class _ChildNudgeCard extends StatelessWidget {
                 child: TextField(
                   controller: controller,
                   maxLines: 7,
-                  style: _answerStyle, // ✅ matches question font
+                  style: _answerStyle,
                   decoration: const InputDecoration(
                     hintText: 'Type here...',
                     hintStyle: TextStyle(
@@ -747,29 +706,9 @@ class _ChildNudgeCard extends StatelessWidget {
                   ),
                 ),
               ),
-
-              const SizedBox(height: 12),
-
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Padding(
-                  padding: const EdgeInsets.only(left: 4),
-                  child: Text(
-                    '...',
-                    style: TextStyle(
-                      fontFamily: 'InstrumentSerif',
-                      fontSize: 18,
-                      color: const Color(0xFFFF6BC6).withOpacity(0.70),
-                      height: 1.0,
-                    ),
-                  ),
-                ),
-              ),
-
-              const SizedBox(height: 10),
-
+              const SizedBox(height: 14),
               Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   _ShareWithParent(
                     value: shareWithParent,
@@ -778,27 +717,41 @@ class _ChildNudgeCard extends StatelessWidget {
                   const Spacer(),
                   SizedBox(
                     width: 170,
-                    height: 62,
-                    child: ElevatedButton(
-                      onPressed: onSave,
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white.withOpacity(0.55),
-                        foregroundColor: Colors.black,
-                        elevation: 10,
-                        shadowColor: Colors.black.withOpacity(0.25),
-                        padding: const EdgeInsets.symmetric(vertical: 18),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(999),
-                        ),
+                    height: 56,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(999),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.25), // 25%
+                            offset: const Offset(0, 5), // X:0, Y:5
+                            blurRadius: 4,
+                            spreadRadius: 0,
+                          ),
+                        ],
                       ),
-                      child: const Text(
-                        'SAVE',
-                        style: TextStyle(
-                          fontFamily: 'PlusJakartaSans',
-                          fontSize: 22,
-                          fontStyle: FontStyle.italic,
-                          fontWeight: FontWeight.w600,
-                          letterSpacing: 0.6,
+                      child: ElevatedButton(
+                        onPressed: onSave,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.white.withOpacity(0.55),
+                          foregroundColor: Colors.black,
+                          elevation: 0, // IMPORTANT: disable default shadow
+                          padding: EdgeInsets.zero,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(999),
+                          ),
+                        ),
+                        child: const Center(
+                          child: Text(
+                            'SAVE',
+                            style: TextStyle(
+                              fontFamily: 'PlusJakartaSans',
+                              fontSize: 18,
+                              fontStyle: FontStyle.italic,
+                              fontWeight: FontWeight.w500,
+                              letterSpacing: 0.6,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -864,11 +817,11 @@ class _ReadOnlyChildAnswerCard extends StatelessWidget {
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
               colors: [
-                Color(0xFFD8E3FF),
-                Color(0xFFB9C8FF),
-                Color(0xFF8FA6FF),
+                Color(0xFF9E7BFF),
+                Color(0xFFE6A46A),
+                Color(0xFFF2C894),
               ],
-              stops: [0.0, 0.55, 1.0],
+              stops: [0.0, 0.6, 1.0],
             ),
           ),
           child: Column(
@@ -970,11 +923,13 @@ class _ShareWithParent extends StatelessWidget {
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(4),
                 ),
-                side: BorderSide(
-                  color: Colors.black.withOpacity(0.9),
+                side: const BorderSide(
+                  color: Colors.black,
                   width: 1.4,
                 ),
-                activeColor: Colors.transparent,
+                fillColor: WidgetStateProperty.resolveWith<Color>(
+                  (states) => Colors.white,
+                ),
                 checkColor: Colors.black,
                 materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 visualDensity:

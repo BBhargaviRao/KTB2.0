@@ -3,6 +3,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../home/home_screen.dart';
 import '../../services/adm_service.dart';
+import 'dart:io';
+import 'package:firebase_messaging/firebase_messaging.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -15,7 +17,7 @@ class _SplashScreenState extends State<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _saveAdmTokenToFirestore();
+    _saveDeviceTokenToFirestore();
 
     Future.delayed(const Duration(milliseconds: 1500), () {
       if (!mounted) return;
@@ -24,16 +26,24 @@ class _SplashScreenState extends State<SplashScreen> {
     });
   }
 
-  Future<void> _saveAdmTokenToFirestore() async {
-    try {
-      final token = await AdmService.getRegistrationId();
-      final uid = FirebaseAuth.instance.currentUser?.uid;
+  Future<void> _saveDeviceTokenToFirestore() async {
+  try {
+    final uid = FirebaseAuth.instance.currentUser?.uid;
 
-      print('ADM TOKEN FROM FLUTTER: $token');
-      print('CURRENT AUTH UID: $uid');
+    print('CURRENT AUTH UID: $uid');
 
-      if (token == null || uid == null) {
-        print('ADM token or auth uid is missing, so Firestore save was skipped.');
+    if (uid == null) {
+      print('Auth uid is missing, so Firestore save was skipped.');
+      return;
+    }
+
+    if (Platform.isIOS || Platform.isAndroid) {
+      final fcmToken = await FirebaseMessaging.instance.getToken();
+
+      print('FCM TOKEN FROM FLUTTER: $fcmToken');
+
+      if (fcmToken == null || fcmToken.isEmpty) {
+        print('FCM token is missing, so Firestore save was skipped.');
         return;
       }
 
@@ -42,17 +52,41 @@ class _SplashScreenState extends State<SplashScreen> {
           .doc(uid)
           .set({
         'uid': uid,
-        'admToken': token,
-        'platform': 'fire_tablet',
-        'pushProvider': 'adm',
+        'fcmToken': fcmToken,
+        'platform': Platform.isIOS ? 'ios' : 'android',
+        'pushProvider': 'fcm',
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      print('ADM token saved to Firestore successfully.');
-    } catch (e) {
-      print('Error saving ADM token to Firestore: $e');
+      print('FCM token saved to Firestore successfully.');
+      return;
     }
+
+    final admToken = await AdmService.getRegistrationId();
+
+    print('ADM TOKEN FROM FLUTTER: $admToken');
+
+    if (admToken == null || admToken.isEmpty) {
+      print('ADM token is missing, so Firestore save was skipped.');
+      return;
+    }
+
+    await FirebaseFirestore.instance
+        .collection('device_registrations')
+        .doc(uid)
+        .set({
+      'uid': uid,
+      'admToken': admToken,
+      'platform': 'fire_tablet',
+      'pushProvider': 'adm',
+      'updatedAt': FieldValue.serverTimestamp(),
+    }, SetOptions(merge: true));
+
+    print('ADM token saved to Firestore successfully.');
+  } catch (e) {
+    print('Error saving device token to Firestore: $e');
   }
+}
 
   PageRouteBuilder _smartAnimateTo(Widget page) {
     return PageRouteBuilder(

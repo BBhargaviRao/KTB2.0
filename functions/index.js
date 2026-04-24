@@ -921,13 +921,12 @@ function getRandomScheduledTime(date, startHour, endHour) {
   start.setHours(startHour, 0, 0, 0);
 
   const end = new Date(date);
-  end.setHours(endHour, 0, 0, 0);
+  end.setHours(endHour, 59, 59, 999);
 
-  const randomMs =
-    start.getTime() +
-    Math.random() * (end.getTime() - start.getTime());
+  const rangeMs = end.getTime() - start.getTime() + 1;
+  const randomOffsetMs = Math.floor(Math.random() * rangeMs);
 
-  return new Date(randomMs);
+  return new Date(start.getTime() + randomOffsetMs);
 }
 
 /**
@@ -938,13 +937,13 @@ function getRandomScheduledTime(date, startHour, endHour) {
  */
 function getScheduledTimeForWindow(now, deliveryWindow) {
   if (deliveryWindow === "parent_morning") {
-    return getRandomScheduledTime(now, 9, 12);
+    return getRandomScheduledTime(now, 9, 11);
   } else if (deliveryWindow === "child_afternoon") {
-    return getRandomScheduledTime(now, 15, 18);
+    return getRandomScheduledTime(now, 15, 17);
   } else if (deliveryWindow === "parent_evening") {
-    return getRandomScheduledTime(now, 19, 21);
+    return getRandomScheduledTime(now, 19, 20);
   } else if (deliveryWindow === "child_night") {
-    return getRandomScheduledTime(now, 20, 21);
+    return getRandomScheduledTime(now, 20, 20);
   }
 
   return null;
@@ -1688,5 +1687,30 @@ exports.markIgnoredNudges = functions.https.onRequest(async (req, res) => {
   } catch (error) {
     console.error("markIgnoredNudges failed:", error);
     res.status(500).send("Error marking ignored nudges.");
+  }
+});
+exports.createStudyFamily = functions.https.onRequest(async (req, res) => {
+  try {
+    const parentName = req.query.parentName;
+    const childName = req.query.childName;
+    const parentPin = req.query.parentPin;
+    const childPin = req.query.childPin;
+
+    return res.status(200).json({
+      success: true,
+      message: "createStudyFamily reached successfully",
+      received: {
+        parentName,
+        childName,
+        parentPin,
+        childPin,
+      },
+    });
+  } catch (error) {
+    console.error("createStudyFamily failed:", error);
+    return res.status(500).json({
+      success: false,
+      error: error.message,
+    });
   }
 });

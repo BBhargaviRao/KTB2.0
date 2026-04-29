@@ -943,7 +943,7 @@ function getScheduledTimeForWindow(now, deliveryWindow) {
   } else if (deliveryWindow === "parent_evening") {
     return getRandomScheduledTime(now, 19, 20);
   } else if (deliveryWindow === "child_night") {
-    return getRandomScheduledTime(now, 20, 20);
+    return getRandomScheduledTime(now, 20, 21);
   }
 
   return null;
@@ -1026,13 +1026,12 @@ async function sendNudgeToTarget(db, familyId, nudgeId, nudge) {
 
 exports.generateDailyNudges = functions
     .runWith({secrets: ["OPENAI_API_KEY"]})
-    .pubsub.schedule("every 30 minutes")
+    .pubsub.schedule("every day 00:05")
     .timeZone(APP_TIME_ZONE)
     .onRun(async () => {
       const db = admin.firestore();
       const now = new Date();
       const localParts = getLocalTimeParts(now);
-      const hour = localParts.hour;
       const dateKey = localParts.dateKey;
 
       const familiesSnapshot = await db.collection("families").get();
@@ -1050,154 +1049,164 @@ exports.generateDailyNudges = functions
           const data = account.data();
           const role = data.role;
 
-          let nudgeType = null;
-          let deliveryWindow = null;
-          let selectedPrompt = null;
+          let windows = [];
 
-          if (role === "parent" && hour >= 9 && hour < 12) {
-            nudgeType = "check_in";
-            deliveryWindow = "parent_morning";
-          } else if (role === "child" && hour >= 15 && hour < 18) {
-            nudgeType = "check_in";
-            deliveryWindow = "child_afternoon";
-          } else if (role === "parent" && hour >= 19 && hour < 21) {
-            nudgeType = "reflection";
-            deliveryWindow = "parent_evening";
-          } else if (role === "child" && hour >= 20 && hour < 21) {
-            nudgeType = "reflection";
-            deliveryWindow = "child_night";
+          if (role === "parent") {
+            windows = [
+              {
+                deliveryWindow: "parent_morning",
+                nudgeType: "check_in",
+              },
+              {
+                deliveryWindow: "parent_evening",
+                nudgeType: "reflection",
+              },
+            ];
+          } else if (role === "child") {
+            windows = [
+              {
+                deliveryWindow: "child_afternoon",
+                nudgeType: "check_in",
+              },
+              {
+                deliveryWindow: "child_night",
+                nudgeType: "reflection",
+              },
+            ];
           } else {
             continue;
           }
 
-          selectedPrompt = await pickPromptForAccount(
-              db,
-              familyId,
-              account.id,
-              deliveryWindow,
-          );
+          for (const windowItem of windows) {
+            const deliveryWindow = windowItem.deliveryWindow;
+            const nudgeType = windowItem.nudgeType;
 
-          if (!selectedPrompt) {
-            console.log("No prompt found for deliveryWindow:", deliveryWindow);
-            continue;
-          }
+            const selectedPrompt = await pickPromptForAccount(
+                db,
+                familyId,
+                account.id,
+                deliveryWindow,
+            );
 
-          let finalPrompt = selectedPrompt.text;
-          let finalPromptCategory = selectedPrompt.category;
-          let promptGenerationMode = "library";
-
-          if (role === "parent" && deliveryWindow === "parent_evening") {
-            try {
-              const childData = await getLatestChildResponse(familyId);
-
-              if (childData && childData.text) {
-                const result = await generateParentPromptFromChildText(
-                    childData.text,
-                );
-
-                if (result && result.parentPrompt) {
-                  finalPrompt = result.parentPrompt;
-                  promptGenerationMode = "llm_context";
-
-                  if (result.contextType === "positive") {
-                    finalPromptCategory = "parent_evening_context_positive";
-                  } else if (result.contextType === "challenging") {
-                    finalPromptCategory = "parent_evening_context_challenging";
-                  } else {
-                    finalPromptCategory = "parent_evening_context_neutral";
-                  }
-
-                  console.log(
-                      "Using LLM parent prompt:",
-                      finalPrompt,
-                      "category:",
-                      finalPromptCategory,
-                  );
-                }
-              }
-            } catch (err) {
-              console.error("LLM fallback to default prompt:", err);
+            if (!selectedPrompt) {
+              console.log(
+                  "No prompt found for deliveryWindow:",
+                  deliveryWindow,
+              );
+              continue;
             }
-          }
 
-          const existingNudge = await db
-              .collection("families")
-              .doc(familyId)
-              .collection("nudges")
-              .where("targetAccountId", "==", account.id)
-              .where("deliveryWindow", "==", deliveryWindow)
-              .where("dateKey", "==", dateKey)
-              .limit(1)
-              .get();
+            let finalPrompt = selectedPrompt.text;
+            let finalPromptCategory = selectedPrompt.category;
+            let promptGenerationMode = "library";
 
-          if (!existingNudge.empty) {
+            if (role === "parent" && deliveryWindow === "parent_evening") {
+              try {
+                const childData = await getLatestChildResponse(familyId);
+
+                if (childData && childData.text) {
+                  const result = await generateParentPromptFromChildText(
+                      childData.text,
+                  );
+
+                  if (result && result.parentPrompt) {
+                    finalPrompt = result.parentPrompt;
+                    promptGenerationMode = "llm_context";
+
+                    if (result.contextType === "positive") {
+                      finalPromptCategory = "parent_evening_context_positive";
+                    } else if (result.contextType === "challenging") {
+                      finalPromptCategory =
+                        "parent_evening_context_challenging";
+                    } else {
+                      finalPromptCategory = "parent_evening_context_neutral";
+                    }
+                  }
+                }
+              } catch (err) {
+                console.error("LLM fallback to default prompt:", err);
+              }
+            }
+
+            const existingNudge = await db
+                .collection("families")
+                .doc(familyId)
+                .collection("nudges")
+                .where("targetAccountId", "==", account.id)
+                .where("deliveryWindow", "==", deliveryWindow)
+                .where("dateKey", "==", dateKey)
+                .limit(1)
+                .get();
+
+            if (!existingNudge.empty) {
+              console.log(
+                  "Skipping duplicate nudge:",
+                  account.id,
+                  deliveryWindow,
+                  dateKey,
+              );
+              continue;
+            }
+
+            const scheduledForTime = getScheduledTimeForWindow(
+                now,
+                deliveryWindow,
+            );
+
+            if (!scheduledForTime) {
+              console.log(
+                  "Could not determine scheduled time for:",
+                  deliveryWindow,
+              );
+              continue;
+            }
+
+            await db
+                .collection("families")
+                .doc(familyId)
+                .collection("nudges")
+                .add({
+                  prompt: finalPrompt,
+                  promptText: finalPrompt,
+                  promptId: selectedPrompt.id,
+                  promptCategory: finalPromptCategory,
+                  promptVariant: selectedPrompt.variant,
+                  promptSource: selectedPrompt.source,
+                  promptGenerationMode: promptGenerationMode,
+                  targetAccountId: account.id,
+                  targetRole: role,
+                  nudgeType: nudgeType,
+                  deliveryWindow: deliveryWindow,
+                  dateKey: dateKey,
+                  status: "pending",
+
+                  notificationStatus: "not_sent",
+                  notificationSentAt: null,
+                  openedAt: null,
+                  answeredAt: null,
+                  ignoredAt: null,
+                  responseLatencySeconds: null,
+                  openLatencySeconds: null,
+
+                  createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                  scheduledFor:
+                    admin.firestore.Timestamp.fromDate(scheduledForTime),
+                });
+
             console.log(
-                "Skipping duplicate nudge:",
+                "Created nudge:",
+                familyId,
                 account.id,
                 deliveryWindow,
                 dateKey,
+                "scheduledFor:",
+                scheduledForTime.toISOString(),
             );
-            continue;
           }
-
-          const scheduledForTime = getScheduledTimeForWindow(
-              now,
-              deliveryWindow,
-          );
-
-          if (!scheduledForTime) {
-            console.log(
-                "Could not determine scheduled time for:",
-                deliveryWindow,
-            );
-            continue;
-          }
-
-          await db
-              .collection("families")
-              .doc(familyId)
-              .collection("nudges")
-              .add({
-                prompt: finalPrompt,
-                promptText: finalPrompt,
-                promptId: selectedPrompt.id,
-                promptCategory: finalPromptCategory,
-                promptVariant: selectedPrompt.variant,
-                promptSource: selectedPrompt.source,
-                promptGenerationMode: promptGenerationMode,
-                targetAccountId: account.id,
-                targetRole: role,
-                nudgeType: nudgeType,
-                deliveryWindow: deliveryWindow,
-                dateKey: dateKey,
-                status: "pending",
-
-                notificationStatus: "not_sent",
-                notificationSentAt: null,
-                openedAt: null,
-                answeredAt: null,
-                ignoredAt: null,
-                responseLatencySeconds: null,
-                openLatencySeconds: null,
-
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                scheduledFor:
-                  admin.firestore.Timestamp.fromDate(scheduledForTime),
-              });
-
-          console.log(
-              "Created nudge:",
-              familyId,
-              account.id,
-              deliveryWindow,
-              dateKey,
-              "scheduledFor:",
-              scheduledForTime.toISOString(),
-          );
         }
       }
 
-      console.log("Window-based nudge check completed");
+      console.log("Daily nudges created for all windows");
       return null;
     });
 

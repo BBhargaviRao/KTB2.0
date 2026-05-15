@@ -1,3 +1,4 @@
+/* eslint-disable require-jsdoc */
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const https = require("https");
@@ -8,6 +9,8 @@ const {defineSecret} = require("firebase-functions/params");
 const openaiApiKey = defineSecret("OPENAI_API_KEY");
 
 admin.initializeApp();
+
+const APP_TIME_ZONE = "America/Boise";
 
 exports.testOpenAI = functions
     .runWith({secrets: ["OPENAI_API_KEY"]})
@@ -178,11 +181,6 @@ Return JSON only:
       }
     });
 
-/**
- * Gets the latest answered child response for today.
- * @param {string} familyId
- * @return {Promise<{nudgeId: string, text: ?string}|null>}
- */
 async function getLatestChildResponse(familyId) {
   const startOfDay = getStartOfLocalDayUtc(new Date());
 
@@ -216,11 +214,6 @@ async function getLatestChildResponse(familyId) {
   };
 }
 
-/**
- * Generates a parent-safe nudge from a child's response.
- * @param {string} childText
- * @return {Promise<{contextType: string, parentPrompt: string}|null>}
- */
 async function generateParentPromptFromChildText(childText) {
   if (!childText) {
     return null;
@@ -299,17 +292,6 @@ Return JSON only:
   };
 }
 
-/**
- * Analyzes a child response and returns emotion + concern info.
- * @param {string} childText
- * @return {Promise<{
- *   emotionLabel: string,
- *   emotionEmoji: string,
- *   toneCategory: string,
- *   isConcerning: boolean,
- *   concernReason: string
- * }|null>}
- */
 async function analyzeChildResponseTone(childText) {
   if (!childText || !childText.trim()) {
     return null;
@@ -372,12 +354,6 @@ Return JSON only in this exact format:
   };
 }
 
-/**
- * Sends an HTTPS POST request with form-urlencoded data.
- * @param {string} url
- * @param {Object} formData
- * @return {Promise<{statusCode: number, body: string}>}
- */
 function postForm(url, formData) {
   return new Promise((resolve, reject) => {
     const body = querystring.stringify(formData);
@@ -413,13 +389,6 @@ function postForm(url, formData) {
   });
 }
 
-/**
- * Sends an HTTPS POST request with JSON data.
- * @param {string} url
- * @param {Object} jsonData
- * @param {string} accessToken
- * @return {Promise<{statusCode: number, body: string}>}
- */
 function postJson(url, jsonData, accessToken) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify(jsonData);
@@ -461,11 +430,6 @@ function postJson(url, jsonData, accessToken) {
   });
 }
 
-/**
- * Gets an ADM access token using Amazon credentials
- * saved in environment variables.
- * @return {Promise<string>}
- */
 async function getAdmAccessToken() {
   const clientId = process.env.ADM_CLIENT_ID;
   const clientSecret = process.env.ADM_CLIENT_SECRET;
@@ -497,11 +461,6 @@ async function getAdmAccessToken() {
   return parsed.access_token;
 }
 
-/**
- * Central structured prompt library.
- * Each prompt has stable research-ready metadata.
- * @return {Object}
- */
 function getPromptBank() {
   return {
     parent_morning: [
@@ -656,11 +615,6 @@ function getPromptBank() {
   };
 }
 
-/**
- * Returns one random item from an array.
- * @param {Array} items
- * @return {*|null}
- */
 function pickRandom(items) {
   if (!items || !items.length) {
     return null;
@@ -670,15 +624,6 @@ function pickRandom(items) {
   return items[index];
 }
 
-/**
- * Picks a prompt for a delivery window while avoiding
- * repeating the same prompt for the same account twice in a row.
- * @param {FirebaseFirestore.Firestore} db
- * @param {string} familyId
- * @param {string} accountId
- * @param {string} deliveryWindow
- * @return {Promise<{id: string, text: string}|null>}
- */
 async function pickPromptForAccount(
     db,
     familyId,
@@ -845,19 +790,6 @@ exports.sendFcmTestNotification = functions.https.onRequest(
     },
 );
 
-const APP_TIME_ZONE = "America/Boise";
-
-/**
- * Gets local date parts in the app timezone.
- * @param {Date} date
- * @return {{
- *   year: string,
- *   month: string,
- *   day: string,
- *   hour: number,
- *   dateKey: string
- * }}
- */
 function getLocalTimeParts(date = new Date()) {
   const formatter = new Intl.DateTimeFormat("en-CA", {
     timeZone: APP_TIME_ZONE,
@@ -884,11 +816,31 @@ function getLocalTimeParts(date = new Date()) {
   };
 }
 
-/**
- * Returns the start of the local day (midnight) as a UTC Date.
- * @param {Date} date
- * @return {Date}
- */
+function getBoiseOffsetForDateKey(dateKey) {
+  const testDate = new Date(`${dateKey}T12:00:00Z`);
+
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIME_ZONE,
+    timeZoneName: "shortOffset",
+  });
+
+  const parts = formatter.formatToParts(testDate);
+  const timeZonePart = parts.find((part) => part.type === "timeZoneName");
+  const value = timeZonePart ? timeZonePart.value : "GMT-6";
+  const match = value.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/);
+
+  if (!match) {
+    return "-06:00";
+  }
+
+  const hourNumber = Number(match[1]);
+  const minuteText = match[2] || "00";
+  const sign = hourNumber >= 0 ? "+" : "-";
+  const hourText = String(Math.abs(hourNumber)).padStart(2, "0");
+
+  return `${sign}${hourText}:${minuteText}`;
+}
+
 function getStartOfLocalDayUtc(date = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: APP_TIME_ZONE,
@@ -902,61 +854,51 @@ function getStartOfLocalDayUtc(date = new Date()) {
     map[part.type] = part.value;
   }
 
-  const localMidnight = new Date(
-      `${map.year}-${map.month}-${map.day}T00:00:00-06:00`,
+  const dateKey = `${map.year}-${map.month}-${map.day}`;
+  const offset = getBoiseOffsetForDateKey(dateKey);
+
+  return new Date(`${dateKey}T00:00:00${offset}`);
+}
+
+function getBoiseDateForLocalTime(dateKey, hour, minute, second) {
+  const offset = getBoiseOffsetForDateKey(dateKey);
+  const hourText = String(hour).padStart(2, "0");
+  const minuteText = String(minute).padStart(2, "0");
+  const secondText = String(second).padStart(2, "0");
+
+  return new Date(
+      `${dateKey}T${hourText}:${minuteText}:${secondText}${offset}`,
   );
-
-  return localMidnight;
 }
 
-/**
- * Returns a random Date inside a window, but never earlier than now.
- * @param {Date} date
- * @param {number} startHour
- * @param {number} endHour
- * @return {Date}
- */
-function getRandomScheduledTime(date, startHour, endHour) {
-  const start = new Date(date);
-  start.setHours(startHour, 0, 0, 0);
+function getRandomScheduledTime(dateKey, startHour, endHour) {
+  const hourRange = endHour - startHour;
+  const randomHour = startHour + Math.floor(Math.random() * hourRange);
+  const randomMinute = Math.floor(Math.random() * 60);
+  const randomSecond = Math.floor(Math.random() * 60);
 
-  const end = new Date(date);
-  end.setHours(endHour, 59, 59, 999);
-
-  const rangeMs = end.getTime() - start.getTime() + 1;
-  const randomOffsetMs = Math.floor(Math.random() * rangeMs);
-
-  return new Date(start.getTime() + randomOffsetMs);
+  return getBoiseDateForLocalTime(
+      dateKey,
+      randomHour,
+      randomMinute,
+      randomSecond,
+  );
 }
 
-/**
- * Gets the random scheduled time for a delivery window.
- * @param {Date} now
- * @param {string} deliveryWindow
- * @return {Date|null}
- */
-function getScheduledTimeForWindow(now, deliveryWindow) {
+function getScheduledTimeForWindow(dateKey, deliveryWindow) {
   if (deliveryWindow === "parent_morning") {
-    return getRandomScheduledTime(now, 9, 11);
+    return getRandomScheduledTime(dateKey, 7, 9);
   } else if (deliveryWindow === "child_afternoon") {
-    return getRandomScheduledTime(now, 15, 17);
+    return getRandomScheduledTime(dateKey, 15, 17);
   } else if (deliveryWindow === "parent_evening") {
-    return getRandomScheduledTime(now, 19, 20);
+    return getRandomScheduledTime(dateKey, 18, 20);
   } else if (deliveryWindow === "child_night") {
-    return getRandomScheduledTime(now, 20, 21);
+    return getRandomScheduledTime(dateKey, 20, 22);
   }
 
   return null;
 }
 
-/**
- * Sends a nudge notification to the target account.
- * @param {FirebaseFirestore.Firestore} db
- * @param {string} familyId
- * @param {string} nudgeId
- * @param {Object} nudge
- * @return {Promise<void>}
- */
 async function sendNudgeToTarget(db, familyId, nudgeId, nudge) {
   const targetAccountId = nudge.targetAccountId;
   const prompt = nudge.prompt;
@@ -1149,7 +1091,7 @@ exports.generateDailyNudges = functions
             }
 
             const scheduledForTime = getScheduledTimeForWindow(
-                now,
+                dateKey,
                 deliveryWindow,
             );
 
@@ -1234,145 +1176,155 @@ exports.generateTestNudges = functions
           const now = new Date();
           const localParts = getLocalTimeParts(now);
           const dateKey = localParts.dateKey;
-          const hour = localParts.hour;
 
-          let nudgeType = null;
-          let deliveryWindow = null;
+          let windows = [];
 
-          if (role === "parent" && hour >= 9 && hour < 12) {
-            nudgeType = "check_in";
-            deliveryWindow = "parent_morning";
-          } else if (role === "child" && hour >= 15 && hour < 18) {
-            nudgeType = "check_in";
-            deliveryWindow = "child_afternoon";
-          } else if (role === "parent" && hour >= 19 && hour < 21) {
-            nudgeType = "reflection";
-            deliveryWindow = "parent_evening";
-          } else if (role === "child" && hour >= 20 && hour < 21) {
-            nudgeType = "reflection";
-            deliveryWindow = "child_night";
+          if (role === "parent") {
+            windows = [
+              {
+                deliveryWindow: "parent_morning",
+                nudgeType: "check_in",
+              },
+              {
+                deliveryWindow: "parent_evening",
+                nudgeType: "reflection",
+              },
+            ];
+          } else if (role === "child") {
+            windows = [
+              {
+                deliveryWindow: "child_afternoon",
+                nudgeType: "check_in",
+              },
+              {
+                deliveryWindow: "child_night",
+                nudgeType: "reflection",
+              },
+            ];
           } else {
             continue;
           }
 
-          const selectedPrompt = await pickPromptForAccount(
-              db,
-              familyId,
-              account.id,
-              deliveryWindow,
-          );
+          for (const windowItem of windows) {
+            const deliveryWindow = windowItem.deliveryWindow;
+            const nudgeType = windowItem.nudgeType;
 
-          if (!selectedPrompt) {
-            console.log("No prompt found for deliveryWindow:", deliveryWindow);
-            continue;
-          }
-
-          let finalPrompt = selectedPrompt.text;
-          let finalPromptCategory = selectedPrompt.category;
-          let promptGenerationMode = "library";
-
-          if (role === "parent" && deliveryWindow === "parent_evening") {
-            try {
-              const childData = await getLatestChildResponse(familyId);
-
-              if (childData && childData.text) {
-                const result = await generateParentPromptFromChildText(
-                    childData.text,
-                );
-
-                if (result && result.parentPrompt) {
-                  finalPrompt = result.parentPrompt;
-                  promptGenerationMode = "llm_context";
-
-                  if (result.contextType === "positive") {
-                    finalPromptCategory = "parent_evening_context_positive";
-                  } else if (result.contextType === "challenging") {
-                    finalPromptCategory = "parent_evening_context_challenging";
-                  } else if (result.contextType === "neutral") {
-                    finalPromptCategory = "parent_evening_context_neutral";
-                  }
-
-                  console.log(
-                      "Using LLM parent test prompt:",
-                      finalPrompt,
-                      "category:",
-                      finalPromptCategory,
-                  );
-                }
-              }
-            } catch (err) {
-              console.error("LLM fallback to default test prompt:", err);
-            }
-          }
-
-          const existingNudge = await db
-              .collection("families")
-              .doc(familyId)
-              .collection("nudges")
-              .where("targetAccountId", "==", account.id)
-              .where("deliveryWindow", "==", deliveryWindow)
-              .where("dateKey", "==", dateKey)
-              .limit(1)
-              .get();
-
-          if (!existingNudge.empty) {
-            console.log(
-                "Skipping duplicate nudge:",
+            const selectedPrompt = await pickPromptForAccount(
+                db,
+                familyId,
                 account.id,
                 deliveryWindow,
-                dateKey,
-            );
-            continue;
-          }
-
-          let scheduledForTime = now;
-
-          if (mode === "scheduled") {
-            scheduledForTime = getScheduledTimeForWindow(
-                now,
-                deliveryWindow,
             );
 
-            if (!scheduledForTime) {
+            if (!selectedPrompt) {
               console.log(
-                  "Could not determine scheduled time for:",
+                  "No prompt found for deliveryWindow:",
                   deliveryWindow,
               );
               continue;
             }
+
+            let finalPrompt = selectedPrompt.text;
+            let finalPromptCategory = selectedPrompt.category;
+            let promptGenerationMode = "library";
+
+            if (role === "parent" && deliveryWindow === "parent_evening") {
+              try {
+                const childData = await getLatestChildResponse(familyId);
+
+                if (childData && childData.text) {
+                  const result = await generateParentPromptFromChildText(
+                      childData.text,
+                  );
+
+                  if (result && result.parentPrompt) {
+                    finalPrompt = result.parentPrompt;
+                    promptGenerationMode = "llm_context";
+
+                    if (result.contextType === "positive") {
+                      finalPromptCategory = "parent_evening_context_positive";
+                    } else if (result.contextType === "challenging") {
+                      finalPromptCategory =
+                        "parent_evening_context_challenging";
+                    } else {
+                      finalPromptCategory = "parent_evening_context_neutral";
+                    }
+                  }
+                }
+              } catch (err) {
+                console.error("LLM fallback to default test prompt:", err);
+              }
+            }
+
+            const existingNudge = await db
+                .collection("families")
+                .doc(familyId)
+                .collection("nudges")
+                .where("targetAccountId", "==", account.id)
+                .where("deliveryWindow", "==", deliveryWindow)
+                .where("dateKey", "==", dateKey)
+                .limit(1)
+                .get();
+
+            if (!existingNudge.empty) {
+              console.log(
+                  "Skipping duplicate nudge:",
+                  account.id,
+                  deliveryWindow,
+                  dateKey,
+              );
+              continue;
+            }
+
+            let scheduledForTime = now;
+
+            if (mode === "scheduled") {
+              scheduledForTime = getScheduledTimeForWindow(
+                  dateKey,
+                  deliveryWindow,
+              );
+
+              if (!scheduledForTime) {
+                console.log(
+                    "Could not determine scheduled time for:",
+                    deliveryWindow,
+                );
+                continue;
+              }
+            }
+
+            await db
+                .collection("families")
+                .doc(familyId)
+                .collection("nudges")
+                .add({
+                  prompt: finalPrompt,
+                  promptText: finalPrompt,
+                  promptId: selectedPrompt.id,
+                  promptCategory: finalPromptCategory,
+                  promptVariant: selectedPrompt.variant,
+                  promptSource: selectedPrompt.source,
+                  promptGenerationMode: promptGenerationMode,
+                  targetAccountId: account.id,
+                  targetRole: role,
+                  nudgeType: nudgeType,
+                  deliveryWindow: deliveryWindow,
+                  dateKey: dateKey,
+                  status: "pending",
+
+                  notificationStatus: "not_sent",
+                  notificationSentAt: null,
+                  openedAt: null,
+                  answeredAt: null,
+                  ignoredAt: null,
+                  responseLatencySeconds: null,
+                  openLatencySeconds: null,
+
+                  createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                  scheduledFor:
+                    admin.firestore.Timestamp.fromDate(scheduledForTime),
+                });
           }
-
-          await db
-              .collection("families")
-              .doc(familyId)
-              .collection("nudges")
-              .add({
-                prompt: finalPrompt,
-                promptText: finalPrompt,
-                promptId: selectedPrompt.id,
-                promptCategory: finalPromptCategory,
-                promptVariant: selectedPrompt.variant,
-                promptSource: selectedPrompt.source,
-                promptGenerationMode: promptGenerationMode,
-                targetAccountId: account.id,
-                targetRole: role,
-                nudgeType: nudgeType,
-                deliveryWindow: deliveryWindow,
-                dateKey: dateKey,
-                status: "pending",
-
-                notificationStatus: "not_sent",
-                notificationSentAt: null,
-                openedAt: null,
-                answeredAt: null,
-                ignoredAt: null,
-                responseLatencySeconds: null,
-                openLatencySeconds: null,
-
-                createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                scheduledFor:
-                  admin.firestore.Timestamp.fromDate(scheduledForTime),
-              });
         }
       }
 
@@ -1698,22 +1650,57 @@ exports.markIgnoredNudges = functions.https.onRequest(async (req, res) => {
     res.status(500).send("Error marking ignored nudges.");
   }
 });
+
 exports.createStudyFamily = functions.https.onRequest(async (req, res) => {
   try {
+    const db = admin.firestore();
+
     const parentName = req.query.parentName;
     const childName = req.query.childName;
     const parentPin = req.query.parentPin;
     const childPin = req.query.childPin;
 
+    if (!parentName || !childName || !parentPin || !childPin) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing parentName, childName, parentPin, or childPin.",
+      });
+    }
+
+    const familyCode = await generateUniqueFamilyCode(db);
+
+    const familyRef = db.collection("families").doc();
+    const parentRef = familyRef.collection("accounts").doc("p1");
+    const childRef = familyRef.collection("accounts").doc("c1");
+
+    await familyRef.set({
+      familyCode: familyCode,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      studyStatus: "active",
+    });
+
+    await parentRef.set({
+      displayName: parentName,
+      role: "parent",
+      pin: String(parentPin),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await childRef.set({
+      displayName: childName,
+      role: "child",
+      pin: String(childPin),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
     return res.status(200).json({
       success: true,
-      message: "createStudyFamily reached successfully",
-      received: {
-        parentName,
-        childName,
-        parentPin,
-        childPin,
-      },
+      familyId: familyRef.id,
+      familyCode: familyCode,
+      parentAccountId: "p1",
+      childAccountId: "c1",
+      parentPin: String(parentPin),
+      childPin: String(childPin),
     });
   } catch (error) {
     console.error("createStudyFamily failed:", error);
@@ -1723,3 +1710,33 @@ exports.createStudyFamily = functions.https.onRequest(async (req, res) => {
     });
   }
 });
+
+function generateFamilyCode() {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let code = "";
+
+  for (let i = 0; i < 6; i++) {
+    const index = Math.floor(Math.random() * chars.length);
+    code += chars[index];
+  }
+
+  return code;
+}
+
+async function generateUniqueFamilyCode(db) {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    const code = generateFamilyCode();
+
+    const snap = await db
+        .collection("families")
+        .where("familyCode", "==", code)
+        .limit(1)
+        .get();
+
+    if (snap.empty) {
+      return code;
+    }
+  }
+
+  throw new Error("Could not generate a unique family code.");
+}

@@ -4,7 +4,7 @@ const admin = require("firebase-admin");
 const https = require("https");
 const querystring = require("querystring");
 const OpenAI = require("openai");
-const {defineSecret} = require("firebase-functions/params");
+const { defineSecret } = require("firebase-functions/params");
 
 const openaiApiKey = defineSecret("OPENAI_API_KEY");
 
@@ -13,110 +13,110 @@ admin.initializeApp();
 const APP_TIME_ZONE = "America/Boise";
 
 exports.testOpenAI = functions
-    .runWith({secrets: ["OPENAI_API_KEY"]})
-    .https.onRequest(async (req, res) => {
-      try {
-        const client = new OpenAI({
-          apiKey: openaiApiKey.value(),
-        });
+  .runWith({ secrets: ["OPENAI_API_KEY"] })
+  .https.onRequest(async (req, res) => {
+    try {
+      const client = new OpenAI({
+        apiKey: openaiApiKey.value(),
+      });
 
-        const response = await client.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            {role: "user", content: "Say hello in 5 words."},
-          ],
-        });
+      const response = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "user", content: "Say hello in 5 words." },
+        ],
+      });
 
-        const text = response.choices[0].message.content;
+      const text = response.choices[0].message.content;
 
-        res.send({success: true, text});
-      } catch (err) {
-        console.error(err);
-        res.status(500).send({error: err.message});
-      }
-    });
+      res.send({ success: true, text });
+    } catch (err) {
+      console.error(err);
+      res.status(500).send({ error: err.message });
+    }
+  });
 
 exports.testLatestChildResponse = functions.https.onRequest(
-    async (req, res) => {
-      try {
-        const familyId = req.query.familyId;
+  async (req, res) => {
+    try {
+      const familyId = req.query.familyId;
 
-        if (!familyId) {
-          return res.status(400).send({
-            error: "Missing familyId",
-          });
-        }
-
-        const startOfDay = getStartOfLocalDayUtc(new Date());
-
-        const nudgesSnap = await admin.firestore()
-            .collection("families")
-            .doc(familyId)
-            .collection("nudges")
-            .where("targetRole", "==", "child")
-            .where("status", "==", "answered")
-            .where(
-                "createdAt",
-                ">=",
-                admin.firestore.Timestamp.fromDate(startOfDay),
-            )
-            .orderBy("createdAt", "desc")
-            .limit(1)
-            .get();
-
-        if (nudgesSnap.empty) {
-          return res.send({
-            success: true,
-            found: false,
-            message: "No answered child nudges found for today.",
-          });
-        }
-
-        const doc = nudgesSnap.docs[0];
-        const data = doc.data();
-
-        return res.send({
-          success: true,
-          found: true,
-          nudgeId: doc.id,
-          responseText: data.response && data.response.text ?
-            data.response.text :
-            null,
-          deliveryWindow: data.deliveryWindow || null,
-          createdAt: data.createdAt || null,
-          shareWithParent: data.shareWithParent || false,
-        });
-      } catch (err) {
-        console.error(err);
-        return res.status(500).send({
-          error: err.message,
+      if (!familyId) {
+        return res.status(400).send({
+          error: "Missing familyId",
         });
       }
-    },
+
+      const startOfDay = getStartOfLocalDayUtc(new Date());
+
+      const nudgesSnap = await admin.firestore()
+        .collection("families")
+        .doc(familyId)
+        .collection("nudges")
+        .where("targetRole", "==", "child")
+        .where("status", "==", "answered")
+        .where(
+          "createdAt",
+          ">=",
+          admin.firestore.Timestamp.fromDate(startOfDay),
+        )
+        .orderBy("createdAt", "desc")
+        .limit(1)
+        .get();
+
+      if (nudgesSnap.empty) {
+        return res.send({
+          success: true,
+          found: false,
+          message: "No answered child nudges found for today.",
+        });
+      }
+
+      const doc = nudgesSnap.docs[0];
+      const data = doc.data();
+
+      return res.send({
+        success: true,
+        found: true,
+        nudgeId: doc.id,
+        responseText: data.response && data.response.text ?
+          data.response.text :
+          null,
+        deliveryWindow: data.deliveryWindow || null,
+        createdAt: data.createdAt || null,
+        shareWithParent: data.shareWithParent || false,
+      });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).send({
+        error: err.message,
+      });
+    }
+  },
 );
 
 exports.testGenerateParentPrompt = functions
-    .runWith({secrets: ["OPENAI_API_KEY"]})
-    .https.onRequest(async (req, res) => {
-      try {
-        const childText = req.query.text;
+  .runWith({ secrets: ["OPENAI_API_KEY"] })
+  .https.onRequest(async (req, res) => {
+    try {
+      const childText = req.query.text;
 
-        if (!childText) {
-          return res.status(400).send({
-            error: "Missing ?text= query param",
-          });
-        }
-
-        const client = new OpenAI({
-          apiKey: openaiApiKey.value(),
+      if (!childText) {
+        return res.status(400).send({
+          error: "Missing ?text= query param",
         });
+      }
 
-        const response = await client.chat.completions.create({
-          model: "gpt-4o-mini",
-          messages: [
-            {
-              role: "system",
-              content: `
+      const client = new OpenAI({
+        apiKey: openaiApiKey.value(),
+      });
+
+      const response = await client.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `
 You create a SHORT PARENT NUDGE for a parent,
 based on a child's private digital experience.
 
@@ -159,45 +159,45 @@ Return JSON only:
   "parentPrompt": "..."
 }
               `,
-            },
-            {
-              role: "user",
-              content: childText,
-            },
-          ],
-        });
+          },
+          {
+            role: "user",
+            content: childText,
+          },
+        ],
+      });
 
-        const text = response.choices[0].message.content;
+      const text = response.choices[0].message.content;
 
-        return res.send({
-          success: true,
-          raw: text,
-        });
-      } catch (err) {
-        console.error(err);
-        return res.status(500).send({
-          error: err.message,
-        });
-      }
-    });
+      return res.send({
+        success: true,
+        raw: text,
+      });
+    } catch (err) {
+      console.error(err);
+      return res.status(500).send({
+        error: err.message,
+      });
+    }
+  });
 
 async function getLatestChildResponse(familyId) {
   const startOfDay = getStartOfLocalDayUtc(new Date());
 
   const nudgesSnap = await admin.firestore()
-      .collection("families")
-      .doc(familyId)
-      .collection("nudges")
-      .where("targetRole", "==", "child")
-      .where("status", "==", "answered")
-      .where(
-          "createdAt",
-          ">=",
-          admin.firestore.Timestamp.fromDate(startOfDay),
-      )
-      .orderBy("createdAt", "desc")
-      .limit(1)
-      .get();
+    .collection("families")
+    .doc(familyId)
+    .collection("nudges")
+    .where("targetRole", "==", "child")
+    .where("status", "==", "answered")
+    .where(
+      "createdAt",
+      ">=",
+      admin.firestore.Timestamp.fromDate(startOfDay),
+    )
+    .orderBy("createdAt", "desc")
+    .limit(1)
+    .get();
 
   if (nudgesSnap.empty) {
     return null;
@@ -360,27 +360,27 @@ function postForm(url, formData) {
     const requestUrl = new URL(url);
 
     const req = https.request(
-        {
-          hostname: requestUrl.hostname,
-          path: requestUrl.pathname,
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Content-Length": Buffer.byteLength(body),
-          },
+      {
+        hostname: requestUrl.hostname,
+        path: requestUrl.pathname,
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Content-Length": Buffer.byteLength(body),
         },
-        (res) => {
-          let data = "";
-          res.on("data", (chunk) => {
-            data += chunk;
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          resolve({
+            statusCode: res.statusCode,
+            body: data,
           });
-          res.on("end", () => {
-            resolve({
-              statusCode: res.statusCode,
-              body: data,
-            });
-          });
-        },
+        });
+      },
     );
 
     req.on("error", reject);
@@ -395,33 +395,33 @@ function postJson(url, jsonData, accessToken) {
     const requestUrl = new URL(url);
 
     const req = https.request(
-        {
-          hostname: requestUrl.hostname,
-          path: requestUrl.pathname,
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${accessToken}`,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "X-Amzn-Type-Version":
-              "com.amazon.device.messaging.ADMMessage@1.0",
-            "X-Amzn-Accept-Type":
-              "com.amazon.device.messaging.ADMSendResult@1.0",
-            "Content-Length": Buffer.byteLength(body),
-          },
+      {
+        hostname: requestUrl.hostname,
+        path: requestUrl.pathname,
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "X-Amzn-Type-Version":
+            "com.amazon.device.messaging.ADMMessage@1.0",
+          "X-Amzn-Accept-Type":
+            "com.amazon.device.messaging.ADMSendResult@1.0",
+          "Content-Length": Buffer.byteLength(body),
         },
-        (res) => {
-          let data = "";
-          res.on("data", (chunk) => {
-            data += chunk;
+      },
+      (res) => {
+        let data = "";
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          resolve({
+            statusCode: res.statusCode,
+            body: data,
           });
-          res.on("end", () => {
-            resolve({
-              statusCode: res.statusCode,
-              body: data,
-            });
-          });
-        },
+        });
+      },
     );
 
     req.on("error", reject);
@@ -436,24 +436,24 @@ async function getAdmAccessToken() {
 
   if (!clientId || !clientSecret) {
     throw new Error(
-        "ADM_CLIENT_ID or ADM_CLIENT_SECRET is missing " +
-        "in environment variables.",
+      "ADM_CLIENT_ID or ADM_CLIENT_SECRET is missing " +
+      "in environment variables.",
     );
   }
 
   const tokenResponse = await postForm(
-      "https://api.amazon.com/auth/O2/token",
-      {
-        grant_type: "client_credentials",
-        scope: "messaging:push",
-        client_id: clientId,
-        client_secret: clientSecret,
-      },
+    "https://api.amazon.com/auth/O2/token",
+    {
+      grant_type: "client_credentials",
+      scope: "messaging:push",
+      client_id: clientId,
+      client_secret: clientSecret,
+    },
   );
 
   if (tokenResponse.statusCode !== 200) {
     throw new Error(
-        `Failed to get ADM access token: ${tokenResponse.body}`,
+      `Failed to get ADM access token: ${tokenResponse.body}`,
     );
   }
 
@@ -625,10 +625,10 @@ function pickRandom(items) {
 }
 
 async function pickPromptForAccount(
-    db,
-    familyId,
-    accountId,
-    deliveryWindow,
+  db,
+  familyId,
+  accountId,
+  deliveryWindow,
 ) {
   const promptBank = getPromptBank();
   const prompts = promptBank[deliveryWindow] || [];
@@ -638,14 +638,14 @@ async function pickPromptForAccount(
   }
 
   const latestSnapshot = await db
-      .collection("families")
-      .doc(familyId)
-      .collection("nudges")
-      .where("targetAccountId", "==", accountId)
-      .where("deliveryWindow", "==", deliveryWindow)
-      .orderBy("createdAt", "desc")
-      .limit(1)
-      .get();
+    .collection("families")
+    .doc(familyId)
+    .collection("nudges")
+    .where("targetAccountId", "==", accountId)
+    .where("deliveryWindow", "==", deliveryWindow)
+    .orderBy("createdAt", "desc")
+    .limit(1)
+    .get();
 
   let lastPromptId = null;
 
@@ -668,126 +668,126 @@ async function pickPromptForAccount(
 }
 
 exports.sendAdmTestNotification = functions.https.onRequest(
-    async (req, res) => {
-      try {
-        const uid = req.query.uid;
+  async (req, res) => {
+    try {
+      const uid = req.query.uid;
 
-        if (!uid) {
-          res.status(400).send("Missing uid query parameter.");
-          return;
-        }
-
-        const db = admin.firestore();
-        const deviceDoc = await db
-            .collection("device_registrations")
-            .doc(uid)
-            .get();
-
-        if (!deviceDoc.exists) {
-          res.status(404).send("No device registration found for that uid.");
-          return;
-        }
-
-        const deviceData = deviceDoc.data();
-        const admToken = deviceData.admToken;
-
-        if (!admToken) {
-          res
-              .status(400)
-              .send("This device registration has no admToken.");
-          return;
-        }
-
-        const accessToken = await getAdmAccessToken();
-
-        const admResponse = await postJson(
-            "https://api.amazon.com/messaging/registrations/" +
-            `${admToken}/messages`,
-            {
-              data: {
-                title: "KTB Backend Test",
-                body: "This notification was sent from Firebase Functions.",
-              },
-              priority: "high",
-              expiresAfter: 3600,
-            },
-            accessToken,
-        );
-
-        res.status(200).send({
-          success: true,
-          uid: uid,
-          admStatusCode: admResponse.statusCode,
-          admResponseBody: admResponse.body,
-        });
-      } catch (error) {
-        console.error("sendAdmTestNotification error:", error);
-        res.status(500).send({
-          success: false,
-          error: error.message,
-        });
+      if (!uid) {
+        res.status(400).send("Missing uid query parameter.");
+        return;
       }
-    },
-);
 
-exports.sendFcmTestNotification = functions.https.onRequest(
-    async (req, res) => {
-      try {
-        const uid = req.query.uid;
+      const db = admin.firestore();
+      const deviceDoc = await db
+        .collection("device_registrations")
+        .doc(uid)
+        .get();
 
-        if (!uid) {
-          res.status(400).send("Missing uid query parameter.");
-          return;
-        }
+      if (!deviceDoc.exists) {
+        res.status(404).send("No device registration found for that uid.");
+        return;
+      }
 
-        const db = admin.firestore();
-        const deviceDoc = await db
-            .collection("device_registrations")
-            .doc(uid)
-            .get();
+      const deviceData = deviceDoc.data();
+      const admToken = deviceData.admToken;
 
-        if (!deviceDoc.exists) {
-          res.status(404).send("No device registration found for that uid.");
-          return;
-        }
+      if (!admToken) {
+        res
+          .status(400)
+          .send("This device registration has no admToken.");
+        return;
+      }
 
-        const deviceData = deviceDoc.data();
-        const fcmToken = deviceData.fcmToken;
+      const accessToken = await getAdmAccessToken();
 
-        if (!fcmToken) {
-          res.status(400).send("This device registration has no fcmToken.");
-          return;
-        }
-
-        const message = {
-          token: fcmToken,
-          notification: {
+      const admResponse = await postJson(
+        "https://api.amazon.com/messaging/registrations/" +
+        `${admToken}/messages`,
+        {
+          data: {
             title: "KTB Backend Test",
             body: "This notification was sent from Firebase Functions.",
           },
-          data: {
-            click_action: "FLUTTER_NOTIFICATION_CLICK",
-          },
-          android: {
-            priority: "high",
-          },
-        };
+          priority: "high",
+          expiresAfter: 3600,
+        },
+        accessToken,
+      );
 
-        const response = await admin.messaging().send(message);
+      res.status(200).send({
+        success: true,
+        uid: uid,
+        admStatusCode: admResponse.statusCode,
+        admResponseBody: admResponse.body,
+      });
+    } catch (error) {
+      console.error("sendAdmTestNotification error:", error);
+      res.status(500).send({
+        success: false,
+        error: error.message,
+      });
+    }
+  },
+);
 
-        res.status(200).send({
-          success: true,
-          uid: uid,
-          fcmMessageId: response,
-        });
-      } catch (error) {
-        console.error("sendFcmTestNotification error:", error);
-        res.status(500).send({
-          success: false,
-          error: error.message,
-        });
+exports.sendFcmTestNotification = functions.https.onRequest(
+  async (req, res) => {
+    try {
+      const uid = req.query.uid;
+
+      if (!uid) {
+        res.status(400).send("Missing uid query parameter.");
+        return;
       }
-    },
+
+      const db = admin.firestore();
+      const deviceDoc = await db
+        .collection("device_registrations")
+        .doc(uid)
+        .get();
+
+      if (!deviceDoc.exists) {
+        res.status(404).send("No device registration found for that uid.");
+        return;
+      }
+
+      const deviceData = deviceDoc.data();
+      const fcmToken = deviceData.fcmToken;
+
+      if (!fcmToken) {
+        res.status(400).send("This device registration has no fcmToken.");
+        return;
+      }
+
+      const message = {
+        token: fcmToken,
+        notification: {
+          title: "KTB Backend Test",
+          body: "This notification was sent from Firebase Functions.",
+        },
+        data: {
+          click_action: "FLUTTER_NOTIFICATION_CLICK",
+        },
+        android: {
+          priority: "high",
+        },
+      };
+
+      const response = await admin.messaging().send(message);
+
+      res.status(200).send({
+        success: true,
+        uid: uid,
+        fcmMessageId: response,
+      });
+    } catch (error) {
+      console.error("sendFcmTestNotification error:", error);
+      res.status(500).send({
+        success: false,
+        error: error.message,
+      });
+    }
+  },
 );
 
 function getLocalTimeParts(date = new Date()) {
@@ -867,7 +867,7 @@ function getBoiseDateForLocalTime(dateKey, hour, minute, second) {
   const secondText = String(second).padStart(2, "0");
 
   return new Date(
-      `${dateKey}T${hourText}:${minuteText}:${secondText}${offset}`,
+    `${dateKey}T${hourText}:${minuteText}:${secondText}${offset}`,
   );
 }
 
@@ -878,10 +878,10 @@ function getRandomScheduledTime(dateKey, startHour, endHour) {
   const randomSecond = Math.floor(Math.random() * 60);
 
   return getBoiseDateForLocalTime(
-      dateKey,
-      randomHour,
-      randomMinute,
-      randomSecond,
+    dateKey,
+    randomHour,
+    randomMinute,
+    randomSecond,
   );
 }
 
@@ -890,9 +890,9 @@ function getScheduledTimeForWindow(dateKey, deliveryWindow) {
     return getRandomScheduledTime(dateKey, 7, 9);
   } else if (deliveryWindow === "child_afternoon") {
     return getRandomScheduledTime(dateKey, 15, 17);
-  } else if (deliveryWindow === "parent_evening") {
-    return getRandomScheduledTime(dateKey, 18, 20);
   } else if (deliveryWindow === "child_night") {
+    return getRandomScheduledTime(dateKey, 18, 20);
+  } else if (deliveryWindow === "parent_evening") {
     return getRandomScheduledTime(dateKey, 20, 22);
   }
 
@@ -908,11 +908,11 @@ async function sendNudgeToTarget(db, familyId, nudgeId, nudge) {
   }
 
   const deviceSnapshot = await db
-      .collection("device_registrations")
-      .where("familyId", "==", familyId)
-      .where("accountId", "==", targetAccountId)
-      .limit(1)
-      .get();
+    .collection("device_registrations")
+    .where("familyId", "==", familyId)
+    .where("accountId", "==", targetAccountId)
+    .limit(1)
+    .get();
 
   if (deviceSnapshot.empty) {
     throw new Error(`No device found for account: ${targetAccountId}`);
@@ -938,6 +938,17 @@ async function sendNudgeToTarget(db, familyId, nudgeId, nudge) {
       android: {
         priority: "high",
       },
+      apns: {
+        headers: {
+          "apns-priority": "10",
+        },
+        payload: {
+          aps: {
+            sound: "default",
+            badge: 1,
+          },
+        },
+      },
     });
 
     console.log("FCM notification sent for nudge:", nudgeId);
@@ -945,19 +956,19 @@ async function sendNudgeToTarget(db, familyId, nudgeId, nudge) {
     const accessToken = await getAdmAccessToken();
 
     await postJson(
-        "https://api.amazon.com/messaging/registrations/" +
-        `${admToken}/messages`,
-        {
-          data: {
-            title: "New Nudge",
-            body: prompt,
-            familyId: familyId,
-            nudgeId: nudgeId,
-          },
-          priority: "high",
-          expiresAfter: 3600,
+      "https://api.amazon.com/messaging/registrations/" +
+      `${admToken}/messages`,
+      {
+        data: {
+          title: "New Nudge",
+          body: prompt,
+          familyId: familyId,
+          nudgeId: nudgeId,
         },
-        accessToken,
+        priority: "high",
+        expiresAfter: 3600,
+      },
+      accessToken,
     );
 
     console.log("ADM notification sent for nudge:", nudgeId);
@@ -967,652 +978,652 @@ async function sendNudgeToTarget(db, familyId, nudgeId, nudge) {
 }
 
 exports.generateDailyNudges = functions
-    .runWith({secrets: ["OPENAI_API_KEY"]})
-    .pubsub.schedule("every day 00:05")
-    .timeZone(APP_TIME_ZONE)
-    .onRun(async () => {
-      const db = admin.firestore();
-      const now = new Date();
-      const localParts = getLocalTimeParts(now);
-      const dateKey = localParts.dateKey;
+  .runWith({ secrets: ["OPENAI_API_KEY"] })
+  .pubsub.schedule("every day 00:05")
+  .timeZone(APP_TIME_ZONE)
+  .onRun(async () => {
+    const db = admin.firestore();
+    const now = new Date();
+    const localParts = getLocalTimeParts(now);
+    const dateKey = localParts.dateKey;
 
-      const familiesSnapshot = await db.collection("families").get();
+    const familiesSnapshot = await db.collection("families").get();
 
-      for (const familyDoc of familiesSnapshot.docs) {
-        const familyId = familyDoc.id;
+    for (const familyDoc of familiesSnapshot.docs) {
+      const familyId = familyDoc.id;
 
-        const accountsSnapshot = await db
-            .collection("families")
-            .doc(familyId)
-            .collection("accounts")
-            .get();
+      const accountsSnapshot = await db
+        .collection("families")
+        .doc(familyId)
+        .collection("accounts")
+        .get();
 
-        for (const account of accountsSnapshot.docs) {
-          const data = account.data();
-          const role = data.role;
+      for (const account of accountsSnapshot.docs) {
+        const data = account.data();
+        const role = data.role;
 
-          let windows = [];
+        let windows = [];
 
-          if (role === "parent") {
-            windows = [
-              {
-                deliveryWindow: "parent_morning",
-                nudgeType: "check_in",
-              },
-              {
-                deliveryWindow: "parent_evening",
-                nudgeType: "reflection",
-              },
-            ];
-          } else if (role === "child") {
-            windows = [
-              {
-                deliveryWindow: "child_afternoon",
-                nudgeType: "check_in",
-              },
-              {
-                deliveryWindow: "child_night",
-                nudgeType: "reflection",
-              },
-            ];
-          } else {
+        if (role === "parent") {
+          windows = [
+            {
+              deliveryWindow: "parent_morning",
+              nudgeType: "check_in",
+            },
+            {
+              deliveryWindow: "parent_evening",
+              nudgeType: "reflection",
+            },
+          ];
+        } else if (role === "child") {
+          windows = [
+            {
+              deliveryWindow: "child_afternoon",
+              nudgeType: "check_in",
+            },
+            {
+              deliveryWindow: "child_night",
+              nudgeType: "reflection",
+            },
+          ];
+        } else {
+          continue;
+        }
+
+        for (const windowItem of windows) {
+          const deliveryWindow = windowItem.deliveryWindow;
+          const nudgeType = windowItem.nudgeType;
+
+          const selectedPrompt = await pickPromptForAccount(
+            db,
+            familyId,
+            account.id,
+            deliveryWindow,
+          );
+
+          if (!selectedPrompt) {
+            console.log(
+              "No prompt found for deliveryWindow:",
+              deliveryWindow,
+            );
             continue;
           }
 
-          for (const windowItem of windows) {
-            const deliveryWindow = windowItem.deliveryWindow;
-            const nudgeType = windowItem.nudgeType;
+          let finalPrompt = selectedPrompt.text;
+          let finalPromptCategory = selectedPrompt.category;
+          let promptGenerationMode = "library";
 
-            const selectedPrompt = await pickPromptForAccount(
-                db,
-                familyId,
-                account.id,
-                deliveryWindow,
-            );
+          if (role === "parent" && deliveryWindow === "parent_evening") {
+            try {
+              const childData = await getLatestChildResponse(familyId);
 
-            if (!selectedPrompt) {
-              console.log(
-                  "No prompt found for deliveryWindow:",
-                  deliveryWindow,
-              );
-              continue;
-            }
+              if (childData && childData.text) {
+                const result = await generateParentPromptFromChildText(
+                  childData.text,
+                );
 
-            let finalPrompt = selectedPrompt.text;
-            let finalPromptCategory = selectedPrompt.category;
-            let promptGenerationMode = "library";
+                if (result && result.parentPrompt) {
+                  finalPrompt = result.parentPrompt;
+                  promptGenerationMode = "llm_context";
 
-            if (role === "parent" && deliveryWindow === "parent_evening") {
-              try {
-                const childData = await getLatestChildResponse(familyId);
-
-                if (childData && childData.text) {
-                  const result = await generateParentPromptFromChildText(
-                      childData.text,
-                  );
-
-                  if (result && result.parentPrompt) {
-                    finalPrompt = result.parentPrompt;
-                    promptGenerationMode = "llm_context";
-
-                    if (result.contextType === "positive") {
-                      finalPromptCategory = "parent_evening_context_positive";
-                    } else if (result.contextType === "challenging") {
-                      finalPromptCategory =
-                        "parent_evening_context_challenging";
-                    } else {
-                      finalPromptCategory = "parent_evening_context_neutral";
-                    }
+                  if (result.contextType === "positive") {
+                    finalPromptCategory = "parent_evening_context_positive";
+                  } else if (result.contextType === "challenging") {
+                    finalPromptCategory =
+                      "parent_evening_context_challenging";
+                  } else {
+                    finalPromptCategory = "parent_evening_context_neutral";
                   }
                 }
-              } catch (err) {
-                console.error("LLM fallback to default prompt:", err);
               }
+            } catch (err) {
+              console.error("LLM fallback to default prompt:", err);
             }
+          }
 
-            const existingNudge = await db
-                .collection("families")
-                .doc(familyId)
-                .collection("nudges")
-                .where("targetAccountId", "==", account.id)
-                .where("deliveryWindow", "==", deliveryWindow)
-                .where("dateKey", "==", dateKey)
-                .limit(1)
-                .get();
+          const existingNudge = await db
+            .collection("families")
+            .doc(familyId)
+            .collection("nudges")
+            .where("targetAccountId", "==", account.id)
+            .where("deliveryWindow", "==", deliveryWindow)
+            .where("dateKey", "==", dateKey)
+            .limit(1)
+            .get();
 
-            if (!existingNudge.empty) {
-              console.log(
-                  "Skipping duplicate nudge:",
-                  account.id,
-                  deliveryWindow,
-                  dateKey,
-              );
-              continue;
+          if (!existingNudge.empty) {
+            console.log(
+              "Skipping duplicate nudge:",
+              account.id,
+              deliveryWindow,
+              dateKey,
+            );
+            continue;
+          }
+
+          const scheduledForTime = getScheduledTimeForWindow(
+            dateKey,
+            deliveryWindow,
+          );
+
+          if (!scheduledForTime) {
+            console.log(
+              "Could not determine scheduled time for:",
+              deliveryWindow,
+            );
+            continue;
+          }
+
+          await db
+            .collection("families")
+            .doc(familyId)
+            .collection("nudges")
+            .add({
+              prompt: finalPrompt,
+              promptText: finalPrompt,
+              promptId: selectedPrompt.id,
+              promptCategory: finalPromptCategory,
+              promptVariant: selectedPrompt.variant,
+              promptSource: selectedPrompt.source,
+              promptGenerationMode: promptGenerationMode,
+              targetAccountId: account.id,
+              targetRole: role,
+              nudgeType: nudgeType,
+              deliveryWindow: deliveryWindow,
+              dateKey: dateKey,
+              status: "pending",
+
+              notificationStatus: "not_sent",
+              notificationSentAt: null,
+              openedAt: null,
+              answeredAt: null,
+              ignoredAt: null,
+              responseLatencySeconds: null,
+              openLatencySeconds: null,
+
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              scheduledFor:
+                admin.firestore.Timestamp.fromDate(scheduledForTime),
+            });
+
+          console.log(
+            "Created nudge:",
+            familyId,
+            account.id,
+            deliveryWindow,
+            dateKey,
+            "scheduledFor:",
+            scheduledForTime.toISOString(),
+          );
+        }
+      }
+    }
+
+    console.log("Daily nudges created for all windows");
+    return null;
+  });
+
+exports.generateTestNudges = functions
+  .runWith({ secrets: ["OPENAI_API_KEY"] })
+  .https.onRequest(async (req, res) => {
+    const db = admin.firestore();
+    const mode = req.query.mode || "instant";
+
+    const familiesSnapshot = await db.collection("families").get();
+
+    for (const familyDoc of familiesSnapshot.docs) {
+      const familyId = familyDoc.id;
+
+      const accountsSnapshot = await db
+        .collection("families")
+        .doc(familyId)
+        .collection("accounts")
+        .get();
+
+      for (const account of accountsSnapshot.docs) {
+        const data = account.data();
+        const role = data.role;
+
+        const now = new Date();
+        const localParts = getLocalTimeParts(now);
+        const dateKey = localParts.dateKey;
+
+        let windows = [];
+
+        if (role === "parent") {
+          windows = [
+            {
+              deliveryWindow: "parent_morning",
+              nudgeType: "check_in",
+            },
+            {
+              deliveryWindow: "parent_evening",
+              nudgeType: "reflection",
+            },
+          ];
+        } else if (role === "child") {
+          windows = [
+            {
+              deliveryWindow: "child_afternoon",
+              nudgeType: "check_in",
+            },
+            {
+              deliveryWindow: "child_night",
+              nudgeType: "reflection",
+            },
+          ];
+        } else {
+          continue;
+        }
+
+        for (const windowItem of windows) {
+          const deliveryWindow = windowItem.deliveryWindow;
+          const nudgeType = windowItem.nudgeType;
+
+          const selectedPrompt = await pickPromptForAccount(
+            db,
+            familyId,
+            account.id,
+            deliveryWindow,
+          );
+
+          if (!selectedPrompt) {
+            console.log(
+              "No prompt found for deliveryWindow:",
+              deliveryWindow,
+            );
+            continue;
+          }
+
+          let finalPrompt = selectedPrompt.text;
+          let finalPromptCategory = selectedPrompt.category;
+          let promptGenerationMode = "library";
+
+          if (role === "parent" && deliveryWindow === "parent_evening") {
+            try {
+              const childData = await getLatestChildResponse(familyId);
+
+              if (childData && childData.text) {
+                const result = await generateParentPromptFromChildText(
+                  childData.text,
+                );
+
+                if (result && result.parentPrompt) {
+                  finalPrompt = result.parentPrompt;
+                  promptGenerationMode = "llm_context";
+
+                  if (result.contextType === "positive") {
+                    finalPromptCategory = "parent_evening_context_positive";
+                  } else if (result.contextType === "challenging") {
+                    finalPromptCategory =
+                      "parent_evening_context_challenging";
+                  } else {
+                    finalPromptCategory = "parent_evening_context_neutral";
+                  }
+                }
+              }
+            } catch (err) {
+              console.error("LLM fallback to default test prompt:", err);
             }
+          }
 
-            const scheduledForTime = getScheduledTimeForWindow(
-                dateKey,
-                deliveryWindow,
+          const existingNudge = await db
+            .collection("families")
+            .doc(familyId)
+            .collection("nudges")
+            .where("targetAccountId", "==", account.id)
+            .where("deliveryWindow", "==", deliveryWindow)
+            .where("dateKey", "==", dateKey)
+            .limit(1)
+            .get();
+
+          if (!existingNudge.empty) {
+            console.log(
+              "Skipping duplicate nudge:",
+              account.id,
+              deliveryWindow,
+              dateKey,
+            );
+            continue;
+          }
+
+          let scheduledForTime = now;
+
+          if (mode === "scheduled") {
+            scheduledForTime = getScheduledTimeForWindow(
+              dateKey,
+              deliveryWindow,
             );
 
             if (!scheduledForTime) {
               console.log(
-                  "Could not determine scheduled time for:",
-                  deliveryWindow,
+                "Could not determine scheduled time for:",
+                deliveryWindow,
               );
               continue;
             }
-
-            await db
-                .collection("families")
-                .doc(familyId)
-                .collection("nudges")
-                .add({
-                  prompt: finalPrompt,
-                  promptText: finalPrompt,
-                  promptId: selectedPrompt.id,
-                  promptCategory: finalPromptCategory,
-                  promptVariant: selectedPrompt.variant,
-                  promptSource: selectedPrompt.source,
-                  promptGenerationMode: promptGenerationMode,
-                  targetAccountId: account.id,
-                  targetRole: role,
-                  nudgeType: nudgeType,
-                  deliveryWindow: deliveryWindow,
-                  dateKey: dateKey,
-                  status: "pending",
-
-                  notificationStatus: "not_sent",
-                  notificationSentAt: null,
-                  openedAt: null,
-                  answeredAt: null,
-                  ignoredAt: null,
-                  responseLatencySeconds: null,
-                  openLatencySeconds: null,
-
-                  createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                  scheduledFor:
-                    admin.firestore.Timestamp.fromDate(scheduledForTime),
-                });
-
-            console.log(
-                "Created nudge:",
-                familyId,
-                account.id,
-                deliveryWindow,
-                dateKey,
-                "scheduledFor:",
-                scheduledForTime.toISOString(),
-            );
           }
-        }
-      }
 
-      console.log("Daily nudges created for all windows");
-      return null;
-    });
-
-exports.generateTestNudges = functions
-    .runWith({secrets: ["OPENAI_API_KEY"]})
-    .https.onRequest(async (req, res) => {
-      const db = admin.firestore();
-      const mode = req.query.mode || "instant";
-
-      const familiesSnapshot = await db.collection("families").get();
-
-      for (const familyDoc of familiesSnapshot.docs) {
-        const familyId = familyDoc.id;
-
-        const accountsSnapshot = await db
+          await db
             .collection("families")
             .doc(familyId)
-            .collection("accounts")
-            .get();
+            .collection("nudges")
+            .add({
+              prompt: finalPrompt,
+              promptText: finalPrompt,
+              promptId: selectedPrompt.id,
+              promptCategory: finalPromptCategory,
+              promptVariant: selectedPrompt.variant,
+              promptSource: selectedPrompt.source,
+              promptGenerationMode: promptGenerationMode,
+              targetAccountId: account.id,
+              targetRole: role,
+              nudgeType: nudgeType,
+              deliveryWindow: deliveryWindow,
+              dateKey: dateKey,
+              status: "pending",
 
-        for (const account of accountsSnapshot.docs) {
-          const data = account.data();
-          const role = data.role;
+              notificationStatus: "not_sent",
+              notificationSentAt: null,
+              openedAt: null,
+              answeredAt: null,
+              ignoredAt: null,
+              responseLatencySeconds: null,
+              openLatencySeconds: null,
 
-          const now = new Date();
-          const localParts = getLocalTimeParts(now);
-          const dateKey = localParts.dateKey;
-
-          let windows = [];
-
-          if (role === "parent") {
-            windows = [
-              {
-                deliveryWindow: "parent_morning",
-                nudgeType: "check_in",
-              },
-              {
-                deliveryWindow: "parent_evening",
-                nudgeType: "reflection",
-              },
-            ];
-          } else if (role === "child") {
-            windows = [
-              {
-                deliveryWindow: "child_afternoon",
-                nudgeType: "check_in",
-              },
-              {
-                deliveryWindow: "child_night",
-                nudgeType: "reflection",
-              },
-            ];
-          } else {
-            continue;
-          }
-
-          for (const windowItem of windows) {
-            const deliveryWindow = windowItem.deliveryWindow;
-            const nudgeType = windowItem.nudgeType;
-
-            const selectedPrompt = await pickPromptForAccount(
-                db,
-                familyId,
-                account.id,
-                deliveryWindow,
-            );
-
-            if (!selectedPrompt) {
-              console.log(
-                  "No prompt found for deliveryWindow:",
-                  deliveryWindow,
-              );
-              continue;
-            }
-
-            let finalPrompt = selectedPrompt.text;
-            let finalPromptCategory = selectedPrompt.category;
-            let promptGenerationMode = "library";
-
-            if (role === "parent" && deliveryWindow === "parent_evening") {
-              try {
-                const childData = await getLatestChildResponse(familyId);
-
-                if (childData && childData.text) {
-                  const result = await generateParentPromptFromChildText(
-                      childData.text,
-                  );
-
-                  if (result && result.parentPrompt) {
-                    finalPrompt = result.parentPrompt;
-                    promptGenerationMode = "llm_context";
-
-                    if (result.contextType === "positive") {
-                      finalPromptCategory = "parent_evening_context_positive";
-                    } else if (result.contextType === "challenging") {
-                      finalPromptCategory =
-                        "parent_evening_context_challenging";
-                    } else {
-                      finalPromptCategory = "parent_evening_context_neutral";
-                    }
-                  }
-                }
-              } catch (err) {
-                console.error("LLM fallback to default test prompt:", err);
-              }
-            }
-
-            const existingNudge = await db
-                .collection("families")
-                .doc(familyId)
-                .collection("nudges")
-                .where("targetAccountId", "==", account.id)
-                .where("deliveryWindow", "==", deliveryWindow)
-                .where("dateKey", "==", dateKey)
-                .limit(1)
-                .get();
-
-            if (!existingNudge.empty) {
-              console.log(
-                  "Skipping duplicate nudge:",
-                  account.id,
-                  deliveryWindow,
-                  dateKey,
-              );
-              continue;
-            }
-
-            let scheduledForTime = now;
-
-            if (mode === "scheduled") {
-              scheduledForTime = getScheduledTimeForWindow(
-                  dateKey,
-                  deliveryWindow,
-              );
-
-              if (!scheduledForTime) {
-                console.log(
-                    "Could not determine scheduled time for:",
-                    deliveryWindow,
-                );
-                continue;
-              }
-            }
-
-            await db
-                .collection("families")
-                .doc(familyId)
-                .collection("nudges")
-                .add({
-                  prompt: finalPrompt,
-                  promptText: finalPrompt,
-                  promptId: selectedPrompt.id,
-                  promptCategory: finalPromptCategory,
-                  promptVariant: selectedPrompt.variant,
-                  promptSource: selectedPrompt.source,
-                  promptGenerationMode: promptGenerationMode,
-                  targetAccountId: account.id,
-                  targetRole: role,
-                  nudgeType: nudgeType,
-                  deliveryWindow: deliveryWindow,
-                  dateKey: dateKey,
-                  status: "pending",
-
-                  notificationStatus: "not_sent",
-                  notificationSentAt: null,
-                  openedAt: null,
-                  answeredAt: null,
-                  ignoredAt: null,
-                  responseLatencySeconds: null,
-                  openLatencySeconds: null,
-
-                  createdAt: admin.firestore.FieldValue.serverTimestamp(),
-                  scheduledFor:
-                    admin.firestore.Timestamp.fromDate(scheduledForTime),
-                });
-          }
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              scheduledFor:
+                admin.firestore.Timestamp.fromDate(scheduledForTime),
+            });
         }
       }
+    }
 
-      res.send(`Test nudges generated in ${mode} mode`);
-    });
+    res.send(`Test nudges generated in ${mode} mode`);
+  });
 
 exports.sendNudgeNotification = functions.firestore
-    .document("families/{familyId}/nudges/{nudgeId}")
-    .onCreate(async (snap, context) => {
-      const nudge = snap.data();
-      const scheduledFor = nudge.scheduledFor ?
-        nudge.scheduledFor.toDate() :
-        null;
+  .document("families/{familyId}/nudges/{nudgeId}")
+  .onCreate(async (snap, context) => {
+    const nudge = snap.data();
+    const scheduledFor = nudge.scheduledFor ?
+      nudge.scheduledFor.toDate() :
+      null;
 
-      console.log(
-          "Nudge created, waiting for scheduled sender:",
-          context.params.nudgeId,
-          scheduledFor ? scheduledFor.toISOString() : "no scheduled time",
-      );
+    console.log(
+      "Nudge created, waiting for scheduled sender:",
+      context.params.nudgeId,
+      scheduledFor ? scheduledFor.toISOString() : "no scheduled time",
+    );
 
-      return null;
-    });
+    return null;
+  });
 
 exports.sendScheduledNotifications = functions.pubsub
-    .schedule("every 5 minutes")
-    .timeZone(APP_TIME_ZONE)
-    .onRun(async () => {
-      const db = admin.firestore();
-      const now = new Date();
+  .schedule("every 1 minutes")
+  .timeZone(APP_TIME_ZONE)
+  .onRun(async () => {
+    const db = admin.firestore();
+    const now = new Date();
 
-      const snap = await db
-          .collectionGroup("nudges")
-          .where("notificationStatus", "==", "not_sent")
-          .where(
-              "scheduledFor",
-              "<=",
-              admin.firestore.Timestamp.fromDate(now),
-          )
-          .get();
+    const snap = await db
+      .collectionGroup("nudges")
+      .where("notificationStatus", "==", "not_sent")
+      .where(
+        "scheduledFor",
+        "<=",
+        admin.firestore.Timestamp.fromDate(now),
+      )
+      .get();
 
-      if (snap.empty) {
-        console.log("No scheduled nudges ready to send.");
+    if (snap.empty) {
+      console.log("No scheduled nudges ready to send.");
+      return null;
+    }
+
+    for (const doc of snap.docs) {
+      const nudge = doc.data();
+      const familyRef = doc.ref.parent.parent;
+
+      if (!familyRef) {
+        console.log("Could not resolve family for nudge:", doc.id);
+        continue;
+      }
+
+      const familyId = familyRef.id;
+      const nudgeId = doc.id;
+
+      try {
+        await sendNudgeToTarget(db, familyId, nudgeId, nudge);
+
+        await doc.ref.update({
+          notificationStatus: "sent",
+          notificationSentAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch (error) {
+        console.error(
+          "sendScheduledNotifications failed for nudge:",
+          nudgeId,
+          error,
+        );
+
+        await doc.ref.update({
+          notificationStatus: "failed",
+          notificationError: error.message,
+        });
+      }
+    }
+
+    return null;
+  });
+
+exports.analyzeAnsweredChildNudge = functions
+  .runWith({ secrets: ["OPENAI_API_KEY"] })
+  .firestore
+  .document("families/{familyId}/nudges/{nudgeId}")
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+
+    if (!before || !after) {
+      return null;
+    }
+
+    const beforeStatus = before.status;
+    const afterStatus = after.status;
+
+    if (beforeStatus === "answered") {
+      return null;
+    }
+
+    if (afterStatus !== "answered") {
+      return null;
+    }
+
+    if (after.targetRole !== "child") {
+      return null;
+    }
+
+    const responseText = after.response &&
+      after.response.text ? after.response.text.trim() : "";
+
+    if (!responseText) {
+      return null;
+    }
+
+    try {
+      const analysis = await analyzeChildResponseTone(responseText);
+
+      if (!analysis) {
         return null;
       }
 
-      for (const doc of snap.docs) {
-        const nudge = doc.data();
-        const familyRef = doc.ref.parent.parent;
+      await change.after.ref.update({
+        emotionLabel: analysis.emotionLabel,
+        emotionEmoji: analysis.emotionEmoji,
+        toneCategory: analysis.toneCategory,
+        isConcerning: analysis.isConcerning,
+        concernReason: analysis.concernReason,
+        emotionAnalyzedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
 
-        if (!familyRef) {
-          console.log("Could not resolve family for nudge:", doc.id);
+      console.log(
+        "Child answer analyzed:",
+        context.params.nudgeId,
+        analysis,
+      );
+    } catch (error) {
+      console.error(
+        "analyzeAnsweredChildNudge failed:",
+        context.params.nudgeId,
+        error,
+      );
+
+      await change.after.ref.update({
+        emotionAnalysisError: error.message,
+      });
+    }
+
+    return null;
+  });
+
+exports.sendParentConcernAlert = functions.firestore
+  .document("families/{familyId}/nudges/{nudgeId}")
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+
+    if (!before || !after) {
+      return null;
+    }
+
+    if (after.targetRole !== "child") {
+      return null;
+    }
+
+    if (before.isConcerning === true) {
+      return null;
+    }
+
+    if (after.isConcerning !== true) {
+      return null;
+    }
+
+    if (after.concernNotificationSentAt) {
+      return null;
+    }
+
+    const db = admin.firestore();
+    const familyId = context.params.familyId;
+
+    try {
+      const parentAccountsSnap = await db
+        .collection("families")
+        .doc(familyId)
+        .collection("accounts")
+        .where("role", "==", "parent")
+        .get();
+
+      if (parentAccountsSnap.empty) {
+        console.log("No parent accounts found for family:", familyId);
+        return null;
+      }
+
+      let sentCount = 0;
+
+      for (const parentDoc of parentAccountsSnap.docs) {
+        const parentAccountId = parentDoc.id;
+
+        const deviceSnapshot = await db
+          .collection("device_registrations")
+          .where("familyId", "==", familyId)
+          .where("accountId", "==", parentAccountId)
+          .limit(1)
+          .get();
+
+        if (deviceSnapshot.empty) {
+          console.log("No device found for parent:", parentAccountId);
           continue;
         }
 
-        const familyId = familyRef.id;
-        const nudgeId = doc.id;
+        const deviceData = deviceSnapshot.docs[0].data();
+        const tokenType = deviceData.tokenType;
+        const fcmToken = deviceData.fcmToken;
+        const admToken = deviceData.admToken ||
+          deviceData.admRegistrationId;
 
-        try {
-          await sendNudgeToTarget(db, familyId, nudgeId, nudge);
-
-          await doc.ref.update({
-            notificationStatus: "sent",
-            notificationSentAt:
-              admin.firestore.FieldValue.serverTimestamp(),
+        if (tokenType === "fcm" && fcmToken) {
+          await admin.messaging().send({
+            token: fcmToken,
+            notification: {
+              title: "Child Check-In Alert",
+              body: "Your child may need a gentle check-in.",
+            },
+            data: {
+              familyId: familyId,
+              sourceNudgeId: context.params.nudgeId,
+              type: "concern_alert",
+              click_action: "FLUTTER_NOTIFICATION_CLICK",
+            },
+            android: {
+              priority: "high",
+            },
           });
-        } catch (error) {
-          console.error(
-              "sendScheduledNotifications failed for nudge:",
-              nudgeId,
-              error,
-          );
 
-          await doc.ref.update({
-            notificationStatus: "failed",
-            notificationError: error.message,
-          });
-        }
-      }
+          sentCount++;
+        } else if (tokenType === "adm" && admToken) {
+          const accessToken = await getAdmAccessToken();
 
-      return null;
-    });
-
-exports.analyzeAnsweredChildNudge = functions
-    .runWith({secrets: ["OPENAI_API_KEY"]})
-    .firestore
-    .document("families/{familyId}/nudges/{nudgeId}")
-    .onUpdate(async (change, context) => {
-      const before = change.before.data();
-      const after = change.after.data();
-
-      if (!before || !after) {
-        return null;
-      }
-
-      const beforeStatus = before.status;
-      const afterStatus = after.status;
-
-      if (beforeStatus === "answered") {
-        return null;
-      }
-
-      if (afterStatus !== "answered") {
-        return null;
-      }
-
-      if (after.targetRole !== "child") {
-        return null;
-      }
-
-      const responseText = after.response &&
-          after.response.text ? after.response.text.trim() : "";
-
-      if (!responseText) {
-        return null;
-      }
-
-      try {
-        const analysis = await analyzeChildResponseTone(responseText);
-
-        if (!analysis) {
-          return null;
-        }
-
-        await change.after.ref.update({
-          emotionLabel: analysis.emotionLabel,
-          emotionEmoji: analysis.emotionEmoji,
-          toneCategory: analysis.toneCategory,
-          isConcerning: analysis.isConcerning,
-          concernReason: analysis.concernReason,
-          emotionAnalyzedAt: admin.firestore.FieldValue.serverTimestamp(),
-        });
-
-        console.log(
-            "Child answer analyzed:",
-            context.params.nudgeId,
-            analysis,
-        );
-      } catch (error) {
-        console.error(
-            "analyzeAnsweredChildNudge failed:",
-            context.params.nudgeId,
-            error,
-        );
-
-        await change.after.ref.update({
-          emotionAnalysisError: error.message,
-        });
-      }
-
-      return null;
-    });
-
-exports.sendParentConcernAlert = functions.firestore
-    .document("families/{familyId}/nudges/{nudgeId}")
-    .onUpdate(async (change, context) => {
-      const before = change.before.data();
-      const after = change.after.data();
-
-      if (!before || !after) {
-        return null;
-      }
-
-      if (after.targetRole !== "child") {
-        return null;
-      }
-
-      if (before.isConcerning === true) {
-        return null;
-      }
-
-      if (after.isConcerning !== true) {
-        return null;
-      }
-
-      if (after.concernNotificationSentAt) {
-        return null;
-      }
-
-      const db = admin.firestore();
-      const familyId = context.params.familyId;
-
-      try {
-        const parentAccountsSnap = await db
-            .collection("families")
-            .doc(familyId)
-            .collection("accounts")
-            .where("role", "==", "parent")
-            .get();
-
-        if (parentAccountsSnap.empty) {
-          console.log("No parent accounts found for family:", familyId);
-          return null;
-        }
-
-        let sentCount = 0;
-
-        for (const parentDoc of parentAccountsSnap.docs) {
-          const parentAccountId = parentDoc.id;
-
-          const deviceSnapshot = await db
-              .collection("device_registrations")
-              .where("familyId", "==", familyId)
-              .where("accountId", "==", parentAccountId)
-              .limit(1)
-              .get();
-
-          if (deviceSnapshot.empty) {
-            console.log("No device found for parent:", parentAccountId);
-            continue;
-          }
-
-          const deviceData = deviceSnapshot.docs[0].data();
-          const tokenType = deviceData.tokenType;
-          const fcmToken = deviceData.fcmToken;
-          const admToken = deviceData.admToken ||
-              deviceData.admRegistrationId;
-
-          if (tokenType === "fcm" && fcmToken) {
-            await admin.messaging().send({
-              token: fcmToken,
-              notification: {
+          await postJson(
+            "https://api.amazon.com/messaging/registrations/" +
+            `${admToken}/messages`,
+            {
+              data: {
                 title: "Child Check-In Alert",
                 body: "Your child may need a gentle check-in.",
-              },
-              data: {
+                type: "concern_alert",
                 familyId: familyId,
                 sourceNudgeId: context.params.nudgeId,
-                type: "concern_alert",
-                click_action: "FLUTTER_NOTIFICATION_CLICK",
               },
-              android: {
-                priority: "high",
-              },
-            });
+              priority: "high",
+              expiresAfter: 3600,
+            },
+            accessToken,
+          );
 
-            sentCount++;
-          } else if (tokenType === "adm" && admToken) {
-            const accessToken = await getAdmAccessToken();
-
-            await postJson(
-                "https://api.amazon.com/messaging/registrations/" +
-                `${admToken}/messages`,
-                {
-                  data: {
-                    title: "Child Check-In Alert",
-                    body: "Your child may need a gentle check-in.",
-                    type: "concern_alert",
-                    familyId: familyId,
-                    sourceNudgeId: context.params.nudgeId,
-                  },
-                  priority: "high",
-                  expiresAfter: 3600,
-                },
-                accessToken,
-            );
-
-            sentCount++;
-          } else {
-            console.log(
-                "Parent device has no supported push token:",
-                parentAccountId,
-            );
-          }
+          sentCount++;
+        } else {
+          console.log(
+            "Parent device has no supported push token:",
+            parentAccountId,
+          );
         }
-
-        await change.after.ref.update({
-          concernNotificationSentAt:
-            admin.firestore.FieldValue.serverTimestamp(),
-          concernNotificationStatus: sentCount > 0 ? "sent" : "no_device",
-        });
-
-        console.log(
-            "Concern alert processed for nudge:",
-            context.params.nudgeId,
-            "sentCount:",
-            sentCount,
-        );
-      } catch (error) {
-        console.error("sendParentConcernAlert failed:", error);
-
-        await change.after.ref.update({
-          concernNotificationStatus: "failed",
-          concernNotificationError: error.message,
-        });
       }
 
-      return null;
-    });
+      await change.after.ref.update({
+        concernNotificationSentAt:
+          admin.firestore.FieldValue.serverTimestamp(),
+        concernNotificationStatus: sentCount > 0 ? "sent" : "no_device",
+      });
+
+      console.log(
+        "Concern alert processed for nudge:",
+        context.params.nudgeId,
+        "sentCount:",
+        sentCount,
+      );
+    } catch (error) {
+      console.error("sendParentConcernAlert failed:", error);
+
+      await change.after.ref.update({
+        concernNotificationStatus: "failed",
+        concernNotificationError: error.message,
+      });
+    }
+
+    return null;
+  });
 
 exports.markIgnoredNudges = functions.https.onRequest(async (req, res) => {
   const db = admin.firestore();
@@ -1622,11 +1633,11 @@ exports.markIgnoredNudges = functions.https.onRequest(async (req, res) => {
     const cutoffDate = new Date(cutoffMs);
 
     const snap = await db
-        .collectionGroup("nudges")
-        .where("status", "==", "pending")
-        .where("notificationStatus", "==", "sent")
-        .where("notificationSentAt", "<=", cutoffDate)
-        .get();
+      .collectionGroup("nudges")
+      .where("status", "==", "pending")
+      .where("notificationStatus", "==", "sent")
+      .where("notificationSentAt", "<=", cutoffDate)
+      .get();
 
     if (snap.empty) {
       res.status(200).send("No ignored nudges to mark.");
@@ -1728,10 +1739,10 @@ async function generateUniqueFamilyCode(db) {
     const code = generateFamilyCode();
 
     const snap = await db
-        .collection("families")
-        .where("familyCode", "==", code)
-        .limit(1)
-        .get();
+      .collection("families")
+      .where("familyCode", "==", code)
+      .limit(1)
+      .get();
 
     if (snap.empty) {
       return code;

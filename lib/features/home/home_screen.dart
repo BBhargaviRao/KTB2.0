@@ -164,9 +164,20 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
         }
       } else if (Platform.isIOS) {
         platformName = 'ios';
-        fcmToken = await FirebaseMessaging.instance.getToken();
-        tokenType = 'fcm';
-        print('FCM TOKEN FROM IOS: $fcmToken');
+
+        const admChannel = MethodChannel('ktb_nudges/adm');
+        final possibleAdmToken =
+            await admChannel.invokeMethod<String>('getAdmRegistrationId');
+
+        if (possibleAdmToken != null && possibleAdmToken.isNotEmpty) {
+          admToken = possibleAdmToken;
+          tokenType = 'adm';
+          print('ADM TOKEN FROM FLUTTER: $admToken');
+        } else {
+          fcmToken = await FirebaseMessaging.instance.getToken();
+          tokenType = 'fcm';
+          print('FCM TOKEN FROM HOME SCREEN: $fcmToken');
+        }
       }
     } catch (e) {
       print('Error while fetching device token: $e');

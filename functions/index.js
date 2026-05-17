@@ -949,6 +949,7 @@ async function sendNudgeToTarget(db, familyId, nudgeId, nudge) {
           },
         },
       },
+      
     });
 
     console.log("FCM notification sent for nudge:", nudgeId);

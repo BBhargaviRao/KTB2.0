@@ -11,6 +11,7 @@ Future<void> _backgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
+  AppleAuthProvider;
   print('BACKGROUND MESSAGE ID: ${message.messageId}');
 }
 
@@ -24,6 +25,14 @@ Future<void> _setupNotifications() async {
     print('Notification permission denied.');
     return;
   }
+
+  // Allow FCM notifications to show as banners while the app is in the foreground on iOS.
+  // Without this, iOS silently drops foreground notifications.
+  await messaging.setForegroundNotificationPresentationOptions(
+    alert: true,
+    badge: true,
+    sound: true,
+  );
 
   if (Platform.isIOS) {
     String? apnsToken;
@@ -40,11 +49,10 @@ Future<void> _setupNotifications() async {
     }
 
     if (apnsToken == null || apnsToken.isEmpty) {
-      print('APNS token still not available yet. Skipping FCM token fetch for now.');
-      return;
+      print('APNS token not available — continuing anyway to fetch FCM token.');
+    } else {
+      print('APNS TOKEN: $apnsToken');
     }
-
-    print('APNS TOKEN: $apnsToken');
   }
 
   final fcmToken = await messaging.getToken();

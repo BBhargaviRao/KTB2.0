@@ -145,10 +145,10 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
     String? tokenType;
     String platformName = 'unknown';
 
-    try {
-      if (Platform.isAndroid) {
-        platformName = 'android';
+    if (Platform.isAndroid) {
+      platformName = 'android';
 
+      try {
         const admChannel = MethodChannel('ktb_nudges/adm');
         final possibleAdmToken =
             await admChannel.invokeMethod<String>('getAdmRegistrationId');
@@ -162,25 +162,36 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
           tokenType = 'fcm';
           print('FCM TOKEN FROM HOME SCREEN: $fcmToken');
         }
-      } else if (Platform.isIOS) {
-        platformName = 'ios';
-
-        const admChannel = MethodChannel('ktb_nudges/adm');
-        final possibleAdmToken =
-            await admChannel.invokeMethod<String>('getAdmRegistrationId');
-
-        if (possibleAdmToken != null && possibleAdmToken.isNotEmpty) {
-          admToken = possibleAdmToken;
-          tokenType = 'adm';
-          print('ADM TOKEN FROM FLUTTER: $admToken');
-        } else {
+      } catch (e) {
+        print('ADM fetch failed, falling back to FCM: $e');
+        try {
           fcmToken = await FirebaseMessaging.instance.getToken();
           tokenType = 'fcm';
           print('FCM TOKEN FROM HOME SCREEN: $fcmToken');
+        } catch (e2) {
+          print('FCM token fetch also failed: $e2');
         }
       }
-    } catch (e) {
-      print('Error while fetching device token: $e');
+    } else if (Platform.isIOS) {
+      platformName = 'ios';
+
+      try {
+        const admChannel = MethodChannel('ktb_nudges/adm');
+        final possibleAdmToken =
+            await admChannel.invokeMethod<String>('getAdmRegistrationId');
+
+        if (possibleAdmToken != null && possibleAdmToken.isNotEmpty) {
+          admToken = possibleAdmToken;
+          tokenType = 'adm';
+          print('ADM TOKEN FROM FLUTTER: $admToken');
+        } else {
+          fcmToken = await FirebaseMessaging.instance.getToken();
+          tokenType = 'fcm';
+          print('FCM TOKEN FROM HOME SCREEN: $fcmToken');
+        }
+      } catch (e) {
+        print('FCM token fetch failed on iOS: $e');
+      }
     }
 
     final data = <String, dynamic>{

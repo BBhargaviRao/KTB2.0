@@ -57,7 +57,6 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     }
 
     await nudgeRef.update({
-      'notificationStatus': 'opened',
       'openedAt': FieldValue.serverTimestamp(),
       'openLatencySeconds': openLatencySeconds,
     });
@@ -109,9 +108,10 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         .where('targetRole', isEqualTo: 'parent')
         .where('targetAccountId', isEqualTo: widget.parentAccountId)
         .where('status', isEqualTo: 'pending')
+        .where('scheduledFor', isLessThanOrEqualTo: Timestamp.now())
         .orderBy('scheduledFor', descending: true)
         .snapshots();
-  }
+    }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _answeredParentStream() {
     return FirebaseFirestore.instance
@@ -131,9 +131,10 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         .doc(widget.familyId)
         .collection('nudges')
         .where('targetRole', isEqualTo: 'child')
+        .where('scheduledFor', isLessThanOrEqualTo: Timestamp.now())
         .orderBy('scheduledFor', descending: true)
         .snapshots();
-  }
+    }
 
   void _openParentFiltersSheet() {
     showModalBottomSheet(
@@ -403,7 +404,6 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
 
         await doc.reference.update({
           'status': 'answered',
-          'notificationStatus': 'answered',
           'response': {'text': answer},
           'answeredAt': FieldValue.serverTimestamp(),
           'responseLatencySeconds': responseLatencySeconds,

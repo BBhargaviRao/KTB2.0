@@ -1,4 +1,6 @@
-/* eslint-disable require-jsdoc */
+console.log("index.js start loading");
+/*
+eslint-disable require-jsdoc */
 const functions = require("firebase-functions/v1");
 const admin = require("firebase-admin");
 const https = require("https");
@@ -890,9 +892,9 @@ function getScheduledTimeForWindow(dateKey, deliveryWindow) {
     return getRandomScheduledTime(dateKey, 7, 9);
   } else if (deliveryWindow === "child_afternoon") {
     return getRandomScheduledTime(dateKey, 15, 17);
-  } else if (deliveryWindow === "parent_evening") {
-    return getRandomScheduledTime(dateKey, 18, 20);
   } else if (deliveryWindow === "child_night") {
+    return getRandomScheduledTime(dateKey, 18, 20);
+  } else if (deliveryWindow === "parent_evening") {
     return getRandomScheduledTime(dateKey, 20, 22);
   }
 
@@ -937,6 +939,16 @@ async function sendNudgeToTarget(db, familyId, nudgeId, nudge) {
       },
       android: {
         priority: "high",
+      },
+      apns: {
+        payload: {
+          aps: {
+            sound: "default",
+          },
+        },
+        headers: {
+          "apns-priority": "10",
+        },
       },
     });
 
@@ -1353,17 +1365,21 @@ exports.sendScheduledNotifications = functions.pubsub
     .timeZone(APP_TIME_ZONE)
     .onRun(async () => {
       const db = admin.firestore();
-      const now = new Date();
+      const now = admin.firestore.Timestamp.now();
+
+      console.log(
+          "sendScheduledNotifications running at:",
+          now.toDate().toISOString(),
+      );
 
       const snap = await db
           .collectionGroup("nudges")
-          .where("notificationStatus", "==", "not_sent")
-          .where(
-              "scheduledFor",
-              "<=",
-              admin.firestore.Timestamp.fromDate(now),
-          )
+          .where("status", "==", "pending")
+          .where("notificationSentAt", "==", null)
+          .where("scheduledFor", "<=", now)
           .get();
+
+      console.log("Scheduled nudges found:", snap.size);
 
       if (snap.empty) {
         console.log("No scheduled nudges ready to send.");
@@ -1382,6 +1398,18 @@ exports.sendScheduledNotifications = functions.pubsub
         const familyId = familyRef.id;
         const nudgeId = doc.id;
 
+        console.log(
+            "Trying to send nudge:",
+            nudgeId,
+            "family:",
+            familyId,
+            "targetAccount:",
+            nudge.targetAccountId,
+            "scheduledFor:",
+            nudge.scheduledFor ?
+            nudge.scheduledFor.toDate().toISOString() : null,
+        );
+
         try {
           await sendNudgeToTarget(db, familyId, nudgeId, nudge);
 
@@ -1389,7 +1417,10 @@ exports.sendScheduledNotifications = functions.pubsub
             notificationStatus: "sent",
             notificationSentAt:
               admin.firestore.FieldValue.serverTimestamp(),
+            notificationError: admin.firestore.FieldValue.delete(),
           });
+
+          console.log("Nudge notification sent successfully:", nudgeId);
         } catch (error) {
           console.error(
               "sendScheduledNotifications failed for nudge:",
@@ -1740,3 +1771,4 @@ async function generateUniqueFamilyCode(db) {
 
   throw new Error("Could not generate a unique family code.");
 }
+console.log("index.js finished loading");

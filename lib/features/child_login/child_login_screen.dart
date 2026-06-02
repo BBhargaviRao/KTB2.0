@@ -57,7 +57,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     }
 
     await nudgeRef.update({
-      'notificationStatus': 'opened',
       'openedAt': FieldValue.serverTimestamp(),
       'openLatencySeconds': openLatencySeconds,
     });
@@ -67,15 +66,16 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
   bool _showAnswered = false;
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _pendingChildNudgesStream() {
-    return FirebaseFirestore.instance
-        .collection('families')
-        .doc(widget.familyId)
-        .collection('nudges')
-        .where('targetRole', isEqualTo: 'child')
-        .where('targetAccountId', isEqualTo: widget.childAccountId)
-        .where('status', isEqualTo: 'pending')
-        .orderBy('scheduledFor', descending: true)
-        .snapshots();
+  return FirebaseFirestore.instance
+      .collection('families')
+      .doc(widget.familyId)
+      .collection('nudges')
+      .where('targetRole', isEqualTo: 'child')
+      .where('targetAccountId', isEqualTo: widget.childAccountId)
+      .where('status', isEqualTo: 'pending')
+      .where('scheduledFor', isLessThanOrEqualTo: Timestamp.now())
+      .orderBy('scheduledFor', descending: true)
+      .snapshots();
   }
 
   Stream<QuerySnapshot<Map<String, dynamic>>> _answeredChildNudgesStream() {
@@ -332,7 +332,6 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
 
         await doc.reference.update({
           'status': 'answered',
-          'notificationStatus': 'answered',
           'shareWithParent': share,
           'response': {'text': answer},
           'answeredAt': FieldValue.serverTimestamp(),

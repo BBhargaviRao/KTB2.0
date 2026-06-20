@@ -51,22 +51,20 @@ class DefaultFirebaseOptions {
   );
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyA-5V_Kff8yc18GNt-oCZbWRHECnW9VvOw',
-    appId: '1:265057195582:android:266187c45291995c75636f',
-    messagingSenderId: '265057195582',
-    projectId: 'nudgeappbyb',
-    storageBucket: 'nudgeappbyb.firebasestorage.app',
+    apiKey: 'AIzaSyBmL8DFSnDkEx0dohxlqQyF5e8SiqqcHYA',
+    appId: '1:438089576313:android:8edb3ed987a8b2d88709a8',
+    messagingSenderId: '438089576313',
+    projectId: 'ktb2-kidstechbalance',
+    storageBucket: 'ktb2-kidstechbalance.firebasestorage.app',
   );
-
   static const FirebaseOptions ios = FirebaseOptions(
-    apiKey: 'AIzaSyDptTZPxpJm74wsDV5YMJMEKh3GdKKtloA',
-    appId: '1:265057195582:ios:ede5d5809598631a75636f',
-    messagingSenderId: '265057195582',
-    projectId: 'nudgeappbyb',
-    storageBucket: 'nudgeappbyb.firebasestorage.app',
-    iosBundleId: 'com.example.ktbNudges',
+    apiKey: 'AIzaSyBwmXPgchb0wWni_ViA-qCWONg-pVSyZP0',
+    appId: '1:438089576313:ios:a899fec53d9082358709a8',
+    messagingSenderId: '438089576313',
+    projectId: 'ktb2-kidstechbalance',
+    storageBucket: 'ktb2-kidstechbalance.firebasestorage.app',
+    iosBundleId: 'com.ktb.kidstechbalance2',
   );
-
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyDptTZPxpJm74wsDV5YMJMEKh3GdKKtloA',
     appId: '1:265057195582:ios:ede5d5809598631a75636f',

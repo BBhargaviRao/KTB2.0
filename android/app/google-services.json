@@ -1,21 +1,21 @@
 {
   "project_info": {
-    "project_number": "265057195582",
-    "project_id": "nudgeappbyb",
-    "storage_bucket": "nudgeappbyb.firebasestorage.app"
+    "project_number": "438089576313",
+    "project_id": "ktb2-kidstechbalance",
+    "storage_bucket": "ktb2-kidstechbalance.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:265057195582:android:266187c45291995c75636f",
+        "mobilesdk_app_id": "1:438089576313:android:8edb3ed987a8b2d88709a8",
         "android_client_info": {
-          "package_name": "com.example.ktb_nudges"
+          "package_name": "com.ktb.kidstechbalance2"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyA-5V_Kff8yc18GNt-oCZbWRHECnW9VvOw"
+          "current_key": "AIzaSyBmL8DFSnDkEx0dohxlqQyF5e8SiqqcHYA"
         }
       ],
       "services": {

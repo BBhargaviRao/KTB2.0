@@ -1,4 +1,4 @@
-package com.example.ktb_nudges.adm
+package com.ktb.kidstechbalance2.adm
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -10,8 +10,8 @@ import android.os.Bundle
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.amazon.device.messaging.ADMMessageHandlerJobBase
-import com.example.ktb_nudges.MainActivity
-import com.example.ktb_nudges.R
+import com.ktb.kidstechbalance2.MainActivity
+import com.ktb.kidstechbalance2.R
 
 class KtbAdmMessageHandler : ADMMessageHandlerJobBase() {
 
@@ -37,7 +37,7 @@ class KtbAdmMessageHandler : ADMMessageHandlerJobBase() {
         val title = extras?.getString("title") ?: "New nudge"
         val body = extras?.getString("body") ?: "Tap to open your app"
 
-        val channelId = "ktb_nudges_channel"
+        val channelId = "ktb2_channel"
         val notificationManager =
             context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 

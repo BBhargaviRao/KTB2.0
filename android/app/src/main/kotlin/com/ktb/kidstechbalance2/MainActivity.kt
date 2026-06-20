@@ -1,4 +1,4 @@
-package com.example.ktb_nudges
+package com.ktb.kidstechbalance2
 
 import android.content.Context
 import android.os.Build
@@ -12,7 +12,7 @@ import kotlin.concurrent.thread
 
 class MainActivity : FlutterActivity() {
 
-    private val CHANNEL = "ktb_nudges/adm"
+    private val CHANNEL = "ktb2/adm"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)

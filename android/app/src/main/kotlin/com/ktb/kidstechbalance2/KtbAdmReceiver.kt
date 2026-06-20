@@ -1,4 +1,4 @@
-package com.example.ktb_nudges.adm
+package com.ktb.kidstechbalance2.adm
 
 import com.amazon.device.messaging.ADMMessageReceiver
 

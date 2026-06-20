@@ -5,8 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:io' show Platform;
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:ktb_nudges/features/parent_login/parent_login_screen.dart';
-import 'package:ktb_nudges/features/child_login/child_login_screen.dart';
+import 'package:ktb2/features/parent_login/parent_login_screen.dart';
+import 'package:ktb2/features/child_login/child_login_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -149,7 +149,7 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
       platformName = 'android';
 
       try {
-        const admChannel = MethodChannel('ktb_nudges/adm');
+        const admChannel = MethodChannel('ktb2/adm');
         final possibleAdmToken =
             await admChannel.invokeMethod<String>('getAdmRegistrationId');
 
@@ -176,7 +176,7 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
       platformName = 'ios';
 
       try {
-        const admChannel = MethodChannel('ktb_nudges/adm');
+        const admChannel = MethodChannel('ktb2/adm');
         final possibleAdmToken =
             await admChannel.invokeMethod<String>('getAdmRegistrationId');
 

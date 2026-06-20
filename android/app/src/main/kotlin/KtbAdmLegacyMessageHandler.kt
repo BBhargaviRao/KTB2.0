@@ -1,4 +1,4 @@
-package com.example.ktb_nudges.adm
+package com.ktb.kidstechbalance2.adm
 
 import android.content.Intent
 import android.os.Bundle

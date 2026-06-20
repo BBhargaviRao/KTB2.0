@@ -2,14 +2,14 @@
     xmlns:amazon="http://schemas.amazon.com/apk/res/android">
 
     <permission
-        android:name="com.example.ktb_nudges.permission.RECEIVE_ADM_MESSAGE"
+        android:name="com.ktb.kidstechbalance2.permission.RECEIVE_ADM_MESSAGE"
         android:protectionLevel="signature" />
 
-    <uses-permission android:name="com.example.ktb_nudges.permission.RECEIVE_ADM_MESSAGE" />
+    <uses-permission android:name="com.ktb.kidstechbalance2.permission.RECEIVE_ADM_MESSAGE" />
     <uses-permission android:name="com.amazon.device.messaging.permission.RECEIVE" />
 
     <application
-        android:label="ktb_nudges"
+        android:label="Kids Tech Balance 2.0"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
 
@@ -63,7 +63,7 @@
                 <action android:name="com.amazon.device.messaging.intent.REGISTRATION" />
                 <action android:name="com.amazon.device.messaging.intent.RECEIVE" />
                 <action android:name="com.amazon.device.messaging.intent.REGISTRATION_ERROR" />
-                <category android:name="com.example.ktb_nudges" />
+                <category android:name="com.ktb.kidstechbalance2" />
             </intent-filter>
         </receiver>
 

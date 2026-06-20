@@ -1,7 +1,7 @@
 import 'package:flutter/services.dart';
 
 class AdmService {
-  static const MethodChannel _channel = MethodChannel('ktb_nudges/adm');
+  static const MethodChannel _channel = MethodChannel('ktb2/adm');
 
   static Future<String?> getRegistrationId() async {
     try {

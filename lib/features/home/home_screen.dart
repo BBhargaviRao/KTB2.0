@@ -5,8 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:io' show Platform;
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:ktb2/features/parent_login/parent_login_screen.dart';
-import 'package:ktb2/features/child_login/child_login_screen.dart';
+import 'package:ktb2/features/dashboard/dashboard_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -43,16 +42,19 @@ class HomeScreen extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: const [
                     SizedBox(height: 40),
-                    Text(
-                      'NudgeLab',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontFamily: 'InstrumentSerif',
-                        fontSize: 72,
-                        fontWeight: FontWeight.w400,
-                        color: Colors.black,
-                        height: 0.95,
-                        letterSpacing: -0.4,
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        'KidTechBalance',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontFamily: 'InstrumentSerif',
+                          fontSize: 62,
+                          fontWeight: FontWeight.w400,
+                          color: Colors.black,
+                          height: 0.95,
+                          letterSpacing: -0.4,
+                        ),
                       ),
                     ),
                     SizedBox(height: 48),
@@ -275,26 +277,14 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
 
       if (!mounted) return;
 
-      if (role == 'parent') {
+      if (role == 'parent' || role == 'child') {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => ParentLoginScreen(
-              parentName: name.isEmpty ? 'Parent' : name,
+            builder: (_) => DashboardScreen(
+              displayName: name.isEmpty ? (role == 'parent' ? 'Parent' : 'Child') : name,
+              role: role,
               familyId: familyId,
-              parentAccountId: accountId,
-            ),
-          ),
-        );
-        return;
-      }
-
-      if (role == 'child') {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => ChildLoginScreen(
-              childName: name.isEmpty ? 'Child' : name,
-              familyId: familyId,
-              childAccountId: accountId,
+              accountId: accountId,
             ),
           ),
         );

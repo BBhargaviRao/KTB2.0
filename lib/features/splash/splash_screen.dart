@@ -154,12 +154,12 @@ class _SplashScreenState extends State<SplashScreen> {
                   FittedBox(
                     fit: BoxFit.scaleDown,
                     child: Text(
-                      'NudgeLab',
+                      'KidTechBalance',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontFamily: 'InstrumentSerif',
                         color: Colors.black,
-                        fontSize: 96,
+                        fontSize: 80,
                         fontWeight: FontWeight.w400,
                         height: 0.95,
                         letterSpacing: -0.408,
@@ -168,7 +168,7 @@ class _SplashScreenState extends State<SplashScreen> {
                   ),
                   SizedBox(height: 16),
                   Text(
-                    'A gentle check-in app for families',
+                    'Screen time, balanced for families',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontFamily: 'InstrumentSerif',

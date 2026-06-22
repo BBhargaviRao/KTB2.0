@@ -391,15 +391,29 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
         child: SafeArea(
           child: CustomScrollView(
             slivers: [
-              const SliverToBoxAdapter(child: SizedBox(height: 26)),
-              const SliverToBoxAdapter(
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              SliverToBoxAdapter(
                 child: Center(
                   child: Text(
-                    'NudgeLabKids',
+                    'Nudges',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontFamily: 'InstrumentSerif',
-                      fontSize: 46,
+                      fontSize: MediaQuery.of(context).size.shortestSide >= 600 ? 64 : 46,
                       fontWeight: FontWeight.w400,
                       color: Colors.black,
                       height: 1.0,
@@ -644,7 +658,7 @@ class _ChildNudgeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.shortestSide >= 600 ? 720 : 520),
         child: Container(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
           decoration: BoxDecoration(
@@ -803,7 +817,7 @@ class _ReadOnlyChildAnswerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.shortestSide >= 600 ? 720 : 520),
         child: Container(
           padding: const EdgeInsets.fromLTRB(16, 16, 16, 14),
           decoration: BoxDecoration(

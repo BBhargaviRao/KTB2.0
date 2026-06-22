@@ -498,15 +498,29 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
         child: SafeArea(
           child: CustomScrollView(
             slivers: [
-              const SliverToBoxAdapter(child: SizedBox(height: 28)),
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: IconButton(
+                      onPressed: () => Navigator.pop(context),
+                      icon: const Icon(
+                        Icons.arrow_back_ios_new_rounded,
+                        color: Colors.black,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               SliverToBoxAdapter(
                 child: Center(
                   child: Text(
-                    _showChildNudges ? 'NudgeLabKids' : 'NudgeLab',
+                    'Nudges',
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontFamily: 'InstrumentSerif',
-                      fontSize: 48,
+                      fontSize: MediaQuery.of(context).size.shortestSide >= 600 ? 64 : 48,
                       fontWeight: FontWeight.w400,
                       color: Colors.black,
                       height: 1.0,
@@ -870,7 +884,7 @@ class _NudgeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.shortestSide >= 600 ? 720 : 520),
         child: Container(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
           decoration: BoxDecoration(
@@ -1032,7 +1046,7 @@ class _ReadOnlyNudgeCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.shortestSide >= 600 ? 720 : 520),
         child: Container(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
           decoration: BoxDecoration(
@@ -1151,7 +1165,7 @@ class _ReadOnlyAnswerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Center(
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 520),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.shortestSide >= 600 ? 720 : 520),
         child: Container(
           padding: const EdgeInsets.fromLTRB(18, 18, 18, 12),
           decoration: BoxDecoration(

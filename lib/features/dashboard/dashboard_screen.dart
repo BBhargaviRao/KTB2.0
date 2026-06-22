@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:ktb2/features/parent_login/parent_login_screen.dart';
+import 'package:ktb2/features/child_login/child_login_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
   final String displayName;
@@ -29,6 +31,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   // Returns true if the device is a tablet (iPad)
   bool get _isTablet => MediaQuery.of(context).size.shortestSide >= 600;
+
+  void _onTabTapped(int index) {
+    if (index == 1) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => widget.role == 'parent'
+              ? ParentLoginScreen(
+                  parentName: widget.displayName,
+                  familyId: widget.familyId,
+                  parentAccountId: widget.accountId,
+                )
+              : ChildLoginScreen(
+                  childName: widget.displayName,
+                  familyId: widget.familyId,
+                  childAccountId: widget.accountId,
+                ),
+        ),
+      );
+      return;
+    }
+    if (index == 2) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Session feature coming soon')),
+      );
+      return;
+    }
+    setState(() => _selectedTab = index);
+  }
 
   // Picks a value based on phone vs tablet
   double _s(double phone, double tablet) => _isTablet ? tablet : phone;
@@ -584,7 +615,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final color = selected ? _textDark : _textLight;
 
     return GestureDetector(
-      onTap: () => setState(() => _selectedTab = index),
+      onTap: () => _onTabTapped(index),
       behavior: HitTestBehavior.opaque,
       child: Padding(
         padding: EdgeInsets.symmetric(horizontal: _s(24, 40), vertical: 4),

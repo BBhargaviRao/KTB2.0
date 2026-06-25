@@ -1,8 +1,10 @@
 package com.ktb.kidstechbalance2
 
 import android.content.Context
+import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Log
 import com.amazon.device.messaging.ADM
 import io.flutter.embedding.android.FlutterActivity
@@ -54,6 +56,34 @@ class MainActivity : FlutterActivity() {
                         val prefs = getSharedPreferences("ktb_adm_prefs", Context.MODE_PRIVATE)
                         val token = prefs.getString("adm_registration_id", null)
                         result.success(token)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ktb2/usage_stats")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "hasPermission" -> result.success(UsageStatsHelper.hasPermission(this))
+                    "requestPermission" -> {
+                        startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                        result.success(null)
+                    }
+                    "getDailyUsage" -> {
+                        if (!UsageStatsHelper.hasPermission(this)) {
+                            result.error("NO_PERMISSION", "Usage Access not granted", null)
+                            return@setMethodCallHandler
+                        }
+                        val dateMillis = call.argument<Long>("dateMillis")
+                            ?: System.currentTimeMillis()
+                        thread {
+                            try {
+                                val data = UsageStatsHelper.getDailyUsage(this, dateMillis)
+                                runOnUiThread { result.success(data) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("ERROR", e.message, null) }
+                            }
+                        }
                     }
                     else -> result.notImplemented()
                 }

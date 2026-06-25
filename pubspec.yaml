@@ -23,6 +23,10 @@ dependencies:
   flutter_riverpod: ^2.5.1
   go_router: ^14.2.0
 
+  # Notifications
+  flutter_local_notifications: ^17.2.4
+  timezone: ^0.9.4
+
   # Utilities
   uuid: ^4.4.0
 

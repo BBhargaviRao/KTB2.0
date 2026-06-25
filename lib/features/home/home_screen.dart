@@ -192,7 +192,14 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
           print('FCM TOKEN FROM HOME SCREEN: $fcmToken');
         }
       } catch (e) {
-        print('FCM token fetch failed on iOS: $e');
+        // ADM channel not available on iOS — fall back to FCM
+        try {
+          fcmToken = await FirebaseMessaging.instance.getToken();
+          tokenType = 'fcm';
+          print('FCM TOKEN FROM HOME SCREEN (iOS fallback): $fcmToken');
+        } catch (e2) {
+          print('FCM token fetch also failed on iOS: $e2');
+        }
       }
     }
 
@@ -219,6 +226,23 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
         .collection('device_registrations')
         .doc(uid)
         .set(data, SetOptions(merge: true));
+
+    // Remove any stale registrations for this account from previous installs
+    // so the Cloud Function always finds the current valid token.
+    try {
+      final staleSnap = await FirebaseFirestore.instance
+          .collection('device_registrations')
+          .where('familyId', isEqualTo: familyId)
+          .where('accountId', isEqualTo: accountId)
+          .get();
+      for (final doc in staleSnap.docs) {
+        if (doc.id != uid) {
+          await doc.reference.delete();
+        }
+      }
+    } catch (e) {
+      print('Stale registration cleanup failed (non-fatal): $e');
+    }
 
     print('Device registration linked to family/account successfully.');
   }

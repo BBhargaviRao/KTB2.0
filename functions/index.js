@@ -1420,6 +1420,16 @@ exports.sendScheduledNotifications = functions.pubsub
             notificationError: admin.firestore.FieldValue.delete(),
           });
 
+          // Write to notification inbox so recipients see it in-app
+          if (nudge.targetRole) {
+            await writeNotificationDoc(db, familyId, {
+              title: "New Nudge",
+              body: nudge.prompt || "You have a new nudge",
+              type: "nudge",
+              targetRole: nudge.targetRole,
+            });
+          }
+
           console.log("Nudge notification sent successfully:", nudgeId);
         } catch (error) {
           console.error(
@@ -1682,6 +1692,128 @@ exports.markIgnoredNudges = functions.https.onRequest(async (req, res) => {
   }
 });
 
+// Notify parent immediately when their child answers any nudge
+exports.notifyParentOnChildAnswer = functions.firestore
+    .document("families/{familyId}/nudges/{nudgeId}")
+    .onUpdate(async (change, context) => {
+      const before = change.before.data();
+      const after = change.after.data();
+
+      if (!before || !after) return null;
+      if (after.targetRole !== "child") return null;
+      if (before.status === "answered") return null; // already answered
+      if (after.status !== "answered") return null;  // not yet answered
+      if (after.parentAnswerNotificationSentAt) return null; // already notified
+
+      const db = admin.firestore();
+      const familyId = context.params.familyId;
+
+      try {
+        const parentSnap = await db
+            .collection("families")
+            .doc(familyId)
+            .collection("accounts")
+            .where("role", "==", "parent")
+            .get();
+
+        if (parentSnap.empty) return null;
+
+        let sentCount = 0;
+
+        for (const parentDoc of parentSnap.docs) {
+          const parentAccountId = parentDoc.id;
+
+          const deviceSnap = await db
+              .collection("device_registrations")
+              .where("familyId", "==", familyId)
+              .where("accountId", "==", parentAccountId)
+              .limit(1)
+              .get();
+
+          if (deviceSnap.empty) continue;
+
+          const deviceData = deviceSnap.docs[0].data();
+          const tokenType = deviceData.tokenType;
+          const fcmToken = deviceData.fcmToken;
+          const admToken = deviceData.admToken || deviceData.admRegistrationId;
+
+          if (tokenType === "fcm" && fcmToken) {
+            await admin.messaging().send({
+              token: fcmToken,
+              notification: {
+                title: "Your child answered a nudge",
+                body: "Check their reflection in the app.",
+              },
+              data: {
+                familyId: familyId,
+                nudgeId: context.params.nudgeId,
+                type: "child_answered",
+                click_action: "FLUTTER_NOTIFICATION_CLICK",
+              },
+              android: {priority: "high"},
+              apns: {
+                payload: {aps: {sound: "default"}},
+                headers: {"apns-priority": "10"},
+              },
+            });
+            sentCount++;
+          } else if (tokenType === "adm" && admToken) {
+            const accessToken = await getAdmAccessToken();
+            await postJson(
+                "https://api.amazon.com/messaging/registrations/" +
+                `${admToken}/messages`,
+                {
+                  data: {
+                    title: "Your child answered a nudge",
+                    body: "Check their reflection in the app.",
+                    type: "child_answered",
+                    familyId: familyId,
+                    nudgeId: context.params.nudgeId,
+                  },
+                  priority: "high",
+                  expiresAfter: 3600,
+                },
+                accessToken,
+            );
+            sentCount++;
+          }
+        }
+
+        await change.after.ref.update({
+          parentAnswerNotificationSentAt:
+            admin.firestore.FieldValue.serverTimestamp(),
+          parentAnswerNotificationStatus:
+            sentCount > 0 ? "sent" : "no_device",
+        });
+
+        if (sentCount > 0) {
+          await writeNotificationDoc(db, familyId, {
+            title: "Your child answered a nudge",
+            body: after.response && after.response.text ?
+              after.response.text.substring(0, 80) : "Check their response",
+            type: "nudge_answered",
+            targetRole: "parent",
+          });
+        }
+
+        console.log(
+            "Parent answer notification for nudge:",
+            context.params.nudgeId,
+            "sent to",
+            sentCount,
+            "parent(s)",
+        );
+      } catch (error) {
+        console.error("notifyParentOnChildAnswer failed:", error);
+        await change.after.ref.update({
+          parentAnswerNotificationStatus: "failed",
+          parentAnswerNotificationError: error.message,
+        });
+      }
+
+      return null;
+    });
+
 exports.createStudyFamily = functions.https.onRequest(async (req, res) => {
   try {
     const db = admin.firestore();
@@ -1771,4 +1903,287 @@ async function generateUniqueFamilyCode(db) {
 
   throw new Error("Could not generate a unique family code.");
 }
+// ── Helper: write a notification record to the family's inbox ─────────────────
+
+async function writeNotificationDoc(db, familyId, {title, body, type, targetRole}) {
+  try {
+    await db.collection("families").doc(familyId)
+        .collection("notifications")
+        .add({
+          title,
+          body,
+          type,
+          targetRole,
+          sentAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+  } catch (err) {
+    console.error("writeNotificationDoc failed:", err.message);
+  }
+}
+
+// ── Helper: send push to a single account (fcm or adm) ────────────────────────
+
+async function sendPushToAccount(db, familyId, accountId, title, body, extraData) {
+  const deviceSnap = await db
+      .collection("device_registrations")
+      .where("familyId", "==", familyId)
+      .where("accountId", "==", accountId)
+      .limit(1)
+      .get();
+
+  if (deviceSnap.empty) {
+    console.log(`No device for account ${accountId} in family ${familyId}`);
+    return false;
+  }
+
+  const d = deviceSnap.docs[0].data();
+  const tokenType = d.tokenType;
+  const fcmToken = d.fcmToken;
+  const admToken = d.admToken || d.admRegistrationId;
+  const data = Object.assign({click_action: "FLUTTER_NOTIFICATION_CLICK"}, extraData);
+
+  if (tokenType === "fcm" && fcmToken) {
+    await admin.messaging().send({
+      token: fcmToken,
+      notification: {title, body},
+      data,
+      android: {priority: "high"},
+      apns: {
+        payload: {aps: {sound: "default"}},
+        headers: {"apns-priority": "10"},
+      },
+    });
+    return true;
+  } else if (tokenType === "adm" && admToken) {
+    const accessToken = await getAdmAccessToken();
+    await postJson(
+        `https://api.amazon.com/messaging/registrations/${admToken}/messages`,
+        {
+          data: Object.assign({title, body}, extraData),
+          priority: "high",
+          expiresAfter: 3600,
+        },
+        accessToken,
+    );
+    return true;
+  }
+  console.log(`No supported push token for account ${accountId}`);
+  return false;
+}
+
+// ── Helper: send push to all accounts with a given role in a family ───────────
+
+async function sendPushToFamilyRole(db, familyId, role, title, body, extraData) {
+  const snap = await db
+      .collection("families").doc(familyId)
+      .collection("accounts")
+      .where("role", "==", role)
+      .get();
+
+  let sentCount = 0;
+  for (const doc of snap.docs) {
+    try {
+      const sent = await sendPushToAccount(
+          db, familyId, doc.id, title, body, extraData,
+      );
+      if (sent) sentCount++;
+    } catch (err) {
+      console.error(`Push failed for account ${doc.id}:`, err.message);
+    }
+  }
+  return sentCount;
+}
+
+// ── Trigger: todo list updated → push the other role ──────────────────────────
+
+exports.notifyOnTodoUpdate = functions.firestore
+    .document("families/{familyId}/dailyData/{dateKey}")
+    .onWrite(async (change, context) => {
+      const after = change.after.exists ? change.after.data() : null;
+      const before = change.before.exists ? change.before.data() : null;
+
+      if (!after || !after.todosUpdatedAt) return null;
+
+      // Deduplicate: skip if todosUpdatedAt didn't actually advance
+      const beforeMs = before && before.todosUpdatedAt ?
+        before.todosUpdatedAt.toMillis() : 0;
+      if (after.todosUpdatedAt.toMillis() <= beforeMs) return null;
+
+      const updatedByRole = after.updatedByRole;
+      if (!updatedByRole) return null;
+
+      const familyId = context.params.familyId;
+      const db = admin.firestore();
+      const notifyRole = updatedByRole === "parent" ? "child" : "parent";
+      const who = updatedByRole === "parent" ? "Parent" : "Child";
+
+      const beforeTodos = Array.isArray(before && before.todos) ?
+        before.todos : [];
+      const afterTodos = Array.isArray(after.todos) ? after.todos : [];
+
+      // Detect which tasks were newly completed (done flipped to true)
+      const beforeDoneSet = new Set(
+          beforeTodos.filter((t) => t.done).map((t) => t.text),
+      );
+      const newlyCompleted = afterTodos.filter(
+          (t) => t.done && !beforeDoneSet.has(t.text),
+      );
+
+      // Detect which tasks were newly added
+      const beforeTextSet = new Set(beforeTodos.map((t) => t.text));
+      const newlyAdded = afterTodos.filter(
+          (t) => !beforeTextSet.has(t.text) && !t.done,
+      );
+
+      const toSend = [];
+
+      for (const task of newlyCompleted) {
+        toSend.push({
+          title: `${who} completed a task`,
+          body: `"${task.text}" has been marked done`,
+          type: "todo_complete",
+        });
+      }
+      for (const task of newlyAdded) {
+        toSend.push({
+          title: `${who} added a new task`,
+          body: `New task: "${task.text}"`,
+          type: "todo_add",
+        });
+      }
+
+      // Fallback: generic message if nothing specific was detected
+      if (toSend.length === 0) {
+        const n = afterTodos.length;
+        toSend.push({
+          title: `${who} updated the to-do list`,
+          body: `To-do list now has ${n === 1 ? "1 task" : `${n} tasks`}`,
+          type: "todo_update",
+        });
+      }
+
+      try {
+        for (const notif of toSend) {
+          const sentCount = await sendPushToFamilyRole(
+              db, familyId, notifyRole, notif.title, notif.body,
+              {type: notif.type, familyId},
+          );
+          await writeNotificationDoc(db, familyId, {
+            ...notif, targetRole: notifyRole,
+          });
+          console.log(
+              `notifyOnTodoUpdate (${notif.type}): sent ${sentCount}` +
+              ` to ${notifyRole}(s), family: ${familyId}`,
+          );
+        }
+      } catch (err) {
+        console.error("notifyOnTodoUpdate failed:", err);
+      }
+
+      return null;
+    });
+
+// ── Trigger: screen time limit changed → push child or parent ─────────────────
+
+exports.notifyOnScreenTimeLimitChange = functions.firestore
+    .document("families/{familyId}/settings/screenTime")
+    .onWrite(async (change, context) => {
+      const after = change.after.exists ? change.after.data() : null;
+      const before = change.before.exists ? change.before.data() : null;
+
+      if (!after) return null;
+
+      const beforeLimit = before ? before.screenTimeLimitMinutes : null;
+      const afterLimit = after.screenTimeLimitMinutes;
+      if (beforeLimit === afterLimit) return null;
+
+      const updatedByRole = after.updatedByRole;
+      if (!updatedByRole) return null;
+
+      const familyId = context.params.familyId;
+      const db = admin.firestore();
+
+      try {
+        if (updatedByRole === "parent") {
+          const title = "Screen time limit updated";
+          const body = `Your parent set today's limit to ${afterLimit} minutes`;
+          const sentCount = await sendPushToFamilyRole(
+              db, familyId, "child", title, body,
+              {type: "screen_time_limit", familyId, limitMinutes: String(afterLimit)},
+          );
+          await writeNotificationDoc(db, familyId, {
+            title, body, type: "screen_time_limit", targetRole: "child",
+          });
+          console.log(
+              `Screen time limit → child: ${sentCount} sent,`,
+              "family:", familyId, "limit:", afterLimit,
+          );
+        } else if (updatedByRole === "child") {
+          const title = "Child changed screen time";
+          const body = `Screen time limit changed to ${afterLimit} minutes`;
+          const sentCount = await sendPushToFamilyRole(
+              db, familyId, "parent", title, body,
+              {type: "child_screen_time_request", familyId, limitMinutes: String(afterLimit)},
+          );
+          await writeNotificationDoc(db, familyId, {
+            title, body, type: "child_screen_time_request", targetRole: "parent",
+          });
+          console.log(
+              `Child screen time request → parent: ${sentCount} sent,`,
+              "family:", familyId,
+          );
+        }
+      } catch (err) {
+        console.error("notifyOnScreenTimeLimitChange failed:", err);
+      }
+
+      return null;
+    });
+
+// ── Trigger: child updates mood emoji → notify parent ─────────────────────────
+
+exports.notifyOnMoodUpdate = functions.firestore
+    .document("families/{familyId}/accounts/{accountId}/dailyData/{dateKey}")
+    .onWrite(async (change, context) => {
+      const after = change.after.exists ? change.after.data() : null;
+      const before = change.before.exists ? change.before.data() : null;
+
+      if (!after || !after.mood) return null;
+      if (before && before.mood === after.mood) return null;
+
+      const familyId = context.params.familyId;
+      const accountId = context.params.accountId;
+      const db = admin.firestore();
+
+      // Only notify parent when the child updates their mood
+      const accountDoc = await db
+          .collection("families").doc(familyId)
+          .collection("accounts").doc(accountId)
+          .get();
+
+      if (!accountDoc.exists) return null;
+      if (accountDoc.data().role !== "child") return null;
+
+      const emoji = after.mood;
+      const title = "Child updated their mood";
+      const body = `Mood for today: ${emoji}`;
+
+      try {
+        const sentCount = await sendPushToFamilyRole(
+            db, familyId, "parent", title, body,
+            {type: "mood_update", familyId},
+        );
+        await writeNotificationDoc(db, familyId, {
+          title, body, type: "mood_update", targetRole: "parent",
+        });
+        console.log(
+            `notifyOnMoodUpdate: sent ${sentCount} to parent(s), family: ${familyId}`,
+        );
+      } catch (err) {
+        console.error("notifyOnMoodUpdate failed:", err);
+      }
+
+      return null;
+    });
+
 console.log("index.js finished loading");

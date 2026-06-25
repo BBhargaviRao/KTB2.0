@@ -53,6 +53,7 @@ class _SplashScreenState extends State<SplashScreen> {
           .set({
         'uid': uid,
         'fcmToken': fcmToken,
+        'tokenType': 'fcm',
         'platform': Platform.isIOS ? 'ios' : 'android',
         'pushProvider': 'fcm',
         'updatedAt': FieldValue.serverTimestamp(),

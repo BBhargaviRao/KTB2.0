@@ -69,6 +69,16 @@ class MainActivity : FlutterActivity() {
                         startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
                         result.success(null)
                     }
+                    "getInstalledApps" -> {
+                        thread {
+                            try {
+                                val data = UsageStatsHelper.getInstalledApps(this)
+                                runOnUiThread { result.success(data) }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("ERROR", e.message, null) }
+                            }
+                        }
+                    }
                     "getDailyUsage" -> {
                         if (!UsageStatsHelper.hasPermission(this)) {
                             result.error("NO_PERMISSION", "Usage Access not granted", null)

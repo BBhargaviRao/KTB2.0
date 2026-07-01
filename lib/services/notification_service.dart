@@ -93,8 +93,33 @@ class NotificationService {
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,
-      uiLocalNotificationDateInterpretation:
-          UILocalNotificationDateInterpretation.absoluteTime,
+    );
+  }
+
+  static const int _limitReachedId = 3000;
+
+  // Immediate notification when screen time limit is reached
+  static Future<void> showLimitReached({required bool isParent}) async {
+    final title = isParent ? "Child's screen time is up" : 'Screen time limit reached';
+    final body  = isParent
+        ? 'Your child has used their full screen time for today.'
+        : 'You have used your full screen time for today.';
+    await _plugin.show(
+      _limitReachedId,
+      title,
+      body,
+      const NotificationDetails(
+        android: AndroidNotificationDetails(
+          _reminderChannelId, _reminderChannelName,
+          importance: Importance.high,
+          priority: Priority.high,
+        ),
+        iOS: DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      ),
     );
   }
 

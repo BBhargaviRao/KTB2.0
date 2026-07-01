@@ -3,7 +3,7 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 70;
+	objectVersion = 54;
 	objects = {
 
 /* Begin PBXBuildFile section */
@@ -21,6 +21,8 @@
 		9C7E84892FECC35E00B5E9B9 /* DeviceActivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9C7E84872FECC34E00B5E9B9 /* DeviceActivity.framework */; };
 		9C7E848B2FECC47F00B5E9B9 /* ExtensionKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9C7E848A2FECC47F00B5E9B9 /* ExtensionKit.framework */; };
 		9C7E848D2FED7FD400B5E9B9 /* ManagedSettings.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9C7E848C2FED7FD400B5E9B9 /* ManagedSettings.framework */; };
+		9C7E848F2FEE020700B5E9B9 /* KtbScreenTimePlatformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C7E848E2FEE020700B5E9B9 /* KtbScreenTimePlatformView.swift */; };
+		9C7E85D72FF024ED00B5E9B9 /* DeviceActivity.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9C7E84872FECC34E00B5E9B9 /* DeviceActivity.framework */; };
 		CA7087E85517D5922FFC0C3D /* Pods_RunnerTests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5287FB8631B83A7734995346 /* Pods_RunnerTests.framework */; };
 /* End PBXBuildFile section */
 
@@ -38,6 +40,13 @@
 			proxyType = 1;
 			remoteGlobalIDString = 9C7E84682FECBB5600B5E9B9;
 			remoteInfo = KtbUsageReport;
+		};
+		9C7E85DD2FF024ED00B5E9B9 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 97C146E61CF9000F007C117D /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 9C7E85D52FF024ED00B5E9B9;
+			remoteInfo = KtbActivityMonitor;
 		};
 /* End PBXContainerItemProxy section */
 
@@ -88,6 +97,8 @@
 		9C7E84872FECC34E00B5E9B9 /* DeviceActivity.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = DeviceActivity.framework; path = System/Library/Frameworks/DeviceActivity.framework; sourceTree = SDKROOT; };
 		9C7E848A2FECC47F00B5E9B9 /* ExtensionKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ExtensionKit.framework; path = System/Library/Frameworks/ExtensionKit.framework; sourceTree = SDKROOT; };
 		9C7E848C2FED7FD400B5E9B9 /* ManagedSettings.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ManagedSettings.framework; path = System/Library/Frameworks/ManagedSettings.framework; sourceTree = SDKROOT; };
+		9C7E848E2FEE020700B5E9B9 /* KtbScreenTimePlatformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KtbScreenTimePlatformView.swift; sourceTree = "<group>"; };
+		9C7E85D62FF024ED00B5E9B9 /* KtbActivityMonitor.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = KtbActivityMonitor.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A615A7780B8657853ED73450 /* Pods-RunnerTests.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-RunnerTests.debug.xcconfig"; path = "Target Support Files/Pods-RunnerTests/Pods-RunnerTests.debug.xcconfig"; sourceTree = "<group>"; };
 		B2290583B32AACFD8AE78A4A /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6D9BCBA27D6DD41A5D5E461 /* GoogleService-Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; name = "GoogleService-Info.plist"; path = "Runner/GoogleService-Info.plist"; sourceTree = "<group>"; };
@@ -98,17 +109,47 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
-		9C7E84762FECBB5600B5E9B9 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+		9C7E84762FECBB5600B5E9B9 /* Exceptions for "KtbUsageReport" folder in "KtbUsageReport" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
 				Info.plist,
 			);
 			target = 9C7E84682FECBB5600B5E9B9 /* KtbUsageReport */;
 		};
+		9C7E85E42FF024ED00B5E9B9 /* Exceptions for "KtbActivityMonitor" folder in "KtbActivityMonitor" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 9C7E85D52FF024ED00B5E9B9 /* KtbActivityMonitor */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		9C7E846A2FECBB5600B5E9B9 /* KtbUsageReport */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (9C7E84762FECBB5600B5E9B9 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = KtbUsageReport; sourceTree = "<group>"; };
+		9C7E846A2FECBB5600B5E9B9 /* KtbUsageReport */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				9C7E84762FECBB5600B5E9B9 /* Exceptions for "KtbUsageReport" folder in "KtbUsageReport" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = KtbUsageReport;
+			sourceTree = "<group>";
+		};
+		9C7E85D82FF024ED00B5E9B9 /* KtbActivityMonitor */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				9C7E85E42FF024ED00B5E9B9 /* Exceptions for "KtbActivityMonitor" folder in "KtbActivityMonitor" target */,
+			);
+			explicitFileTypes = {
+			};
+			explicitFolders = (
+			);
+			path = KtbActivityMonitor;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -136,6 +177,14 @@
 				9C7E84892FECC35E00B5E9B9 /* DeviceActivity.framework in Frameworks */,
 				9C7E848B2FECC47F00B5E9B9 /* ExtensionKit.framework in Frameworks */,
 				9C7E848D2FED7FD400B5E9B9 /* ManagedSettings.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9C7E85D32FF024ED00B5E9B9 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				9C7E85D72FF024ED00B5E9B9 /* DeviceActivity.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -192,6 +241,7 @@
 				9740EEB11CF90186004384FC /* Flutter */,
 				97C146F01CF9000F007C117D /* Runner */,
 				9C7E846A2FECBB5600B5E9B9 /* KtbUsageReport */,
+				9C7E85D82FF024ED00B5E9B9 /* KtbActivityMonitor */,
 				97C146EF1CF9000F007C117D /* Products */,
 				331C8082294A63A400263BE5 /* RunnerTests */,
 				11C3D2FB8BE673EA980C165F /* Pods */,
@@ -206,6 +256,7 @@
 				97C146EE1CF9000F007C117D /* Runner.app */,
 				331C8081294A63A400263BE5 /* RunnerTests.xctest */,
 				9C7E84692FECBB5600B5E9B9 /* KtbUsageReport.appex */,
+				9C7E85D62FF024ED00B5E9B9 /* KtbActivityMonitor.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -213,6 +264,7 @@
 		97C146F01CF9000F007C117D /* Runner */ = {
 			isa = PBXGroup;
 			children = (
+				9C7E848E2FEE020700B5E9B9 /* KtbScreenTimePlatformView.swift */,
 				9C0A43A82FA3F35400A3AA74 /* Runner.entitlements */,
 				97C146FA1CF9000F007C117D /* Main.storyboard */,
 				97C146FD1CF9000F007C117D /* Assets.xcassets */,
@@ -258,15 +310,17 @@
 				97C146EB1CF9000F007C117D /* Frameworks */,
 				97C146EC1CF9000F007C117D /* Resources */,
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
-				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
 				7F8F60B09E3F76DA77BE38A4 /* [CP] Embed Pods Frameworks */,
 				C29AD4AA412BB9B0EE56CF19 /* [CP] Copy Pods Resources */,
 				9C7E847B2FECBB5600B5E9B9 /* Embed ExtensionKit Extensions */,
+				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
+				9C7E86002FF024ED00B5E9B9 /* Embed KtbActivityMonitor */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				9C7E84742FECBB5600B5E9B9 /* PBXTargetDependency */,
+				9C7E85DE2FF024ED00B5E9B9 /* PBXTargetDependency */,
 			);
 			name = Runner;
 			productName = Runner;
@@ -289,11 +343,29 @@
 				9C7E846A2FECBB5600B5E9B9 /* KtbUsageReport */,
 			);
 			name = KtbUsageReport;
-			packageProductDependencies = (
-			);
 			productName = KtbUsageReport;
 			productReference = 9C7E84692FECBB5600B5E9B9 /* KtbUsageReport.appex */;
 			productType = "com.apple.product-type.extensionkit-extension";
+		};
+		9C7E85D52FF024ED00B5E9B9 /* KtbActivityMonitor */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9C7E85E52FF024ED00B5E9B9 /* Build configuration list for PBXNativeTarget "KtbActivityMonitor" */;
+			buildPhases = (
+				9C7E85D22FF024ED00B5E9B9 /* Sources */,
+				9C7E85D32FF024ED00B5E9B9 /* Frameworks */,
+				9C7E85D42FF024ED00B5E9B9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				9C7E85D82FF024ED00B5E9B9 /* KtbActivityMonitor */,
+			);
+			name = KtbActivityMonitor;
+			productName = KtbActivityMonitor;
+			productReference = 9C7E85D62FF024ED00B5E9B9 /* KtbActivityMonitor.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 /* End PBXNativeTarget section */
 
@@ -317,6 +389,9 @@
 					9C7E84682FECBB5600B5E9B9 = {
 						CreatedOnToolsVersion = 26.3;
 					};
+					9C7E85D52FF024ED00B5E9B9 = {
+						CreatedOnToolsVersion = 26.3;
+					};
 				};
 			};
 			buildConfigurationList = 97C146E91CF9000F007C117D /* Build configuration list for PBXProject "Runner" */;
@@ -335,6 +410,7 @@
 				97C146ED1CF9000F007C117D /* Runner */,
 				331C8080294A63A400263BE5 /* RunnerTests */,
 				9C7E84682FECBB5600B5E9B9 /* KtbUsageReport */,
+				9C7E85D52FF024ED00B5E9B9 /* KtbActivityMonitor */,
 			);
 		};
 /* End PBXProject section */
@@ -360,6 +436,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		9C7E84672FECBB5600B5E9B9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9C7E85D42FF024ED00B5E9B9 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -398,6 +481,7 @@
 			files = (
 			);
 			inputPaths = (
+				"${TARGET_BUILD_DIR}/${INFOPLIST_PATH}",
 			);
 			name = "Thin Binary";
 			outputPaths = (
@@ -415,12 +499,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Embed Pods Frameworks";
 			outputFileListPaths = (
-			);
-			outputPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-frameworks-${CONFIGURATION}-output-files.xcfilelist",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -442,6 +523,23 @@
 			shellPath = /bin/sh;
 			shellScript = "/bin/sh \"$FLUTTER_ROOT/packages/flutter_tools/bin/xcode_backend.sh\" build";
 		};
+		9C7E86002FF024ED00B5E9B9 /* Embed KtbActivityMonitor */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/KtbActivityMonitor.appex",
+			);
+			name = "Embed KtbActivityMonitor";
+			outputPaths = (
+				"$(CODESIGNING_FOLDER_PATH)/PlugIns/KtbActivityMonitor.appex",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "MONITOR_SRC=\"${BUILT_PRODUCTS_DIR}/KtbActivityMonitor.appex\"\nPLUGINS_DIR=\"${CODESIGNING_FOLDER_PATH}/PlugIns\"\nif [ -d \"${MONITOR_SRC}\" ]; then\n  mkdir -p \"${PLUGINS_DIR}\"\n  cp -rf \"${MONITOR_SRC}\" \"${PLUGINS_DIR}/KtbActivityMonitor.appex\"\nfi\n";
+		};
 		C29AD4AA412BB9B0EE56CF19 /* [CP] Copy Pods Resources */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -451,12 +549,9 @@
 			inputFileListPaths = (
 				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-resources-${CONFIGURATION}-input-files.xcfilelist",
 			);
-			inputPaths = (
-			);
 			name = "[CP] Copy Pods Resources";
 			outputFileListPaths = (
-			);
-			outputPaths = (
+				"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-resources-${CONFIGURATION}-output-files.xcfilelist",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
@@ -501,11 +596,19 @@
 			buildActionMask = 2147483647;
 			files = (
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
+				9C7E848F2FEE020700B5E9B9 /* KtbScreenTimePlatformView.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		9C7E84652FECBB5600B5E9B9 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		9C7E85D22FF024ED00B5E9B9 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -524,6 +627,11 @@
 			isa = PBXTargetDependency;
 			target = 9C7E84682FECBB5600B5E9B9 /* KtbUsageReport */;
 			targetProxy = 9C7E84732FECBB5600B5E9B9 /* PBXContainerItemProxy */;
+		};
+		9C7E85DE2FF024ED00B5E9B9 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 9C7E85D52FF024ED00B5E9B9 /* KtbActivityMonitor */;
+			targetProxy = 9C7E85DD2FF024ED00B5E9B9 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -844,9 +952,9 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CODE_SIGN_ENTITLEMENTS = KtbUsageReport/KtbUsageReport.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = YVV4W4Q37T;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = KtbUsageReport/Info.plist;
@@ -887,9 +995,9 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CODE_SIGN_ENTITLEMENTS = KtbUsageReport/KtbUsageReport.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = YVV4W4Q37T;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = KtbUsageReport/Info.plist;
@@ -927,9 +1035,9 @@
 				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
 				CODE_SIGN_ENTITLEMENTS = KtbUsageReport/KtbUsageReport.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = YVV4W4Q37T;
-				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GCC_C_LANGUAGE_STANDARD = gnu17;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = KtbUsageReport/Info.plist;
@@ -945,6 +1053,129 @@
 				MARKETING_VERSION = 1.0;
 				MTL_FAST_MATH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = com.ktb.kidstechbalance2.KtbUsageReport;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Profile;
+		};
+		9C7E85E12FF024ED00B5E9B9 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_ENTITLEMENTS = KtbActivityMonitor/KtbActivityMonitor.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YVV4W4Q37T;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = KtbActivityMonitor/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = KtbActivityMonitor;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ktb.kidstechbalance2.KtbActivityMonitor;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		9C7E85E22FF024ED00B5E9B9 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_ENTITLEMENTS = KtbActivityMonitor/KtbActivityMonitor.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YVV4W4Q37T;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = KtbActivityMonitor/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = KtbActivityMonitor;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ktb.kidstechbalance2.KtbActivityMonitor;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		9C7E85E32FF024ED00B5E9B9 /* Profile */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CODE_SIGN_ENTITLEMENTS = KtbActivityMonitor/KtbActivityMonitor.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = YVV4W4Q37T;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = KtbActivityMonitor/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = KtbActivityMonitor;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.2;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MARKETING_VERSION = 1.0;
+				MTL_FAST_MATH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.ktb.kidstechbalance2.KtbActivityMonitor;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -995,6 +1226,16 @@
 				9C7E84782FECBB5600B5E9B9 /* Debug */,
 				9C7E84792FECBB5600B5E9B9 /* Release */,
 				9C7E847A2FECBB5600B5E9B9 /* Profile */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9C7E85E52FF024ED00B5E9B9 /* Build configuration list for PBXNativeTarget "KtbActivityMonitor" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9C7E85E12FF024ED00B5E9B9 /* Debug */,
+				9C7E85E22FF024ED00B5E9B9 /* Release */,
+				9C7E85E32FF024ED00B5E9B9 /* Profile */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

@@ -10,5 +10,9 @@
 	<array>
 		<string>group.com.ktb.kidstechbalance2</string>
 	</array>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>YVV4W4Q37T.com.ktb.kidstechbalance2</string>
+	</array>
 </dict>
 </plist>

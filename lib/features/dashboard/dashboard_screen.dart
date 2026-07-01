@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:ktb2/features/parent_login/parent_login_screen.dart';
 import 'package:ktb2/features/child_login/child_login_screen.dart';
+import 'package:ktb2/features/dashboard/session_tab.dart';
 import 'package:ktb2/services/notification_service.dart';
 import 'package:ktb2/services/usage_stats_service.dart';
 
@@ -59,7 +62,7 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
   int _selectedTab = 0;
   DateTime _selectedDate = _todayDate();
   bool _todoExpanded = false;
@@ -73,22 +76,119 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // Local screen time reminder preferences (device-specific)
   List<int> _screenTimeReminders = [];
 
-  // App usage data (Android only — loaded on initState and date change)
+  // App usage data (Android — loaded on initState; iOS — read from Firestore after extension)
   List<AppUsageEntry> _usageEntries = [];
   bool _usagePermissionGranted = false;
   bool _usageLoading = false;
+
+  // iOS vendorId (identifierForVendor) — used to key Firestore iosDeviceData docs
+  String? _iosVendorId;
 
   // Parent: child's usage loaded from Firestore; toggle between views
   List<AppUsageEntry> _childUsageEntries = [];
   bool _childUsageLoading = false;
   bool _showChildUsage = true; // parent only — default to child's view
+  String? _childIosVendorId; // parent: child's vendorId for iOS data lookup
 
-  // Total minutes used today: child = own device; parent = child's device (for limit bar)
+  // Live screen time minutes written by KtbActivityMonitor extension → Firestore.
+  // This is the single source of truth for the bar on BOTH child and parent.
+  int _firestoreScreenTimeMinutes = 0;
+  // Guards against stale stream data after a session reset. Set to true when a
+  // new session starts; cleared only once Firestore confirms the reset (returns 0).
+  bool _sessionResetPending = false;
+  // Screen-lock-aware elapsed minutes from native session timer.
+  // Updated by _refreshSessionBar when App Group has no extension data yet.
+  int _nativeSessionMinutes = 0;
+  // Prevents restarting DeviceActivity monitoring on every settings stream event.
+  // Only calls startScreenTimeMonitoring when the session+limit combination changes.
+  String? _monitoringKey;
+  // True once the KtbActivityMonitor extension has supplied at least one value.
+  // Ensures extension data always wins over the wall-clock relay fallback.
+  bool _extensionHasFired = false;
+
+  // When an active session is running, this is the session's startTime.
+  DateTime? _activeSessionStartTime;
+
+  // Fires every 30 s while a session is active to redraw the bar.
+  Timer? _sessionPollTimer;
+
+  // Screen time minutes to show on the bar.
+  // 1. Firestore extension data (session-specific, works for both child & parent).
+  // 2. Native screen-lock-aware timer for iOS child (first ~5 min before extension fires).
+  // 3. Local usage stats when no session is active.
   int get _usedMinutes {
+    final cap = _lastKnownScreenTimeLimit ?? 9999;
+    // Firestore value from KtbActivityMonitor is the truth for both roles.
+    // It persists after session end so the bar freezes at the final value.
+    if (_firestoreScreenTimeMinutes > 0) {
+      return _firestoreScreenTimeMinutes.clamp(0, cap);
+    }
+    // Session active but extension hasn't fired yet (first ~5 min):
+    if (_activeSessionStartTime != null) {
+      // iOS child: use the screen-lock-aware native timer (updated by
+      // _refreshSessionBar every 30 s). This correctly subtracts device-off
+      // time, unlike a plain wall-clock difference.
+      if (Platform.isIOS && widget.role == 'child') {
+        return _nativeSessionMinutes.clamp(0, cap);
+      }
+      // Parent (Android) waits for first Firestore update from extension.
+      return 0;
+    }
+    // No session, no extension data: show today's local usage.
     if (widget.role == 'child') {
       return _usageEntries.fold(0, (s, e) => s + e.timeMinutes);
     }
     return _childUsageEntries.fold(0, (s, e) => s + e.timeMinutes);
+  }
+
+  // Triggers a rebuild so _usedMinutes re-evaluates with the current clock.
+  // On child iOS: also relays any App Group session minutes to Firestore via
+  // Firebase SDK — more reliable than the extension's URLSession REST call.
+  void _refreshSessionBar() async {
+    if (!mounted || _activeSessionStartTime == null) return;
+    if (Platform.isIOS && widget.role == 'child') {
+      final dateKey = _dateKey(_todayDate());
+      final agMins = await UsageStatsService.getAppGroupMinutes(dateKey);
+
+      if (agMins > 0 && (agMins > _firestoreScreenTimeMinutes || !_extensionHasFired)) {
+        // Extension fired — always prefer this over wall-clock relay.
+        _extensionHasFired = true;
+        FirebaseFirestore.instance
+            .collection('families').doc(widget.familyId)
+            .collection('dashboard_days').doc(dateKey)
+            .set({
+              'screenTimeUsedMinutes': agMins,
+              'screenTimeLastUpdatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+        if (mounted) setState(() {
+          _firestoreScreenTimeMinutes = agMins;
+          _nativeSessionMinutes = agMins;
+        });
+        return;
+      }
+
+      // Extension hasn't fired yet — relay native (wall-clock) timer to Firestore
+      // so the parent sees live session data even before the first 5-min threshold.
+      // Once the extension fires it will overwrite this with accurate screen-on time.
+      final elapsed = await UsageStatsService.getSessionElapsedMinutes();
+      if (!mounted) return;
+      if (elapsed > 0 && !_extensionHasFired && elapsed > _firestoreScreenTimeMinutes) {
+        FirebaseFirestore.instance
+            .collection('families').doc(widget.familyId)
+            .collection('dashboard_days').doc(dateKey)
+            .set({
+              'screenTimeUsedMinutes': elapsed,
+              'screenTimeLastUpdatedAt': FieldValue.serverTimestamp(),
+            }, SetOptions(merge: true));
+        if (mounted) setState(() {
+          _nativeSessionMinutes = elapsed;
+          _firestoreScreenTimeMinutes = elapsed;
+        });
+      } else if (elapsed != _nativeSessionMinutes && mounted) {
+        setState(() => _nativeSessionMinutes = elapsed);
+      }
+    }
+    if (mounted) setState(() {});
   }
 
   List<AppUsageEntry> get _activeEntries =>
@@ -101,6 +201,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Stream<DocumentSnapshot<Map<String, dynamic>>>? _todosStream;
   String? _todosStreamDateKey;
   late final Stream<DocumentSnapshot<Map<String, dynamic>>> _settingsStream;
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _dashDayStream;
+  String? _dashDayStreamKey;
 
   // For cross-device todo notifications
   Timestamp? _lastKnownTodosUpdatedAt;
@@ -109,6 +211,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // For screen time limit change notifications
   int? _lastKnownScreenTimeLimit;
   bool _settingsStreamInitialized = false;
+
+  // Periodic refresh timer and limit-reached tracking
+  Timer? _usageRefreshTimer;
+  String? _limitReachedNotifiedDateKey; // tracks which day we already notified
 
   // ── Firestore refs ────────────────────────────────────────────────────────
 
@@ -142,11 +248,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
     return _todosStream!;
   }
 
+  // Returns a cached dashboard_days stream — avoids re-subscription on every rebuild
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _getDashDayStream(String todayKey) {
+    if (_dashDayStreamKey != todayKey || _dashDayStream == null) {
+      _dashDayStreamKey = todayKey;
+      _dashDayStream = FirebaseFirestore.instance
+          .collection('families').doc(widget.familyId)
+          .collection('dashboard_days').doc(todayKey)
+          .snapshots();
+    }
+    return _dashDayStream;
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _settingsStream = _familySettingsRef().snapshots();
     Future.microtask(_loadInitialData);
+    _usageRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!mounted || _selectedDate != _todayDate()) return;
+      if (Platform.isIOS && widget.role == 'child' && _iosVendorId != null) {
+        _loadIosSessionMinutes(_selectedDate);
+      } else {
+        _loadUsageStats(_selectedDate);
+      }
+      if (widget.role == 'parent') _loadChildUsageFromFirestore(_selectedDate);
+    });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _usageRefreshTimer?.cancel();
+    _sessionPollTimer?.cancel();
+    super.dispose();
+  }
+
+  // Refresh the session bar immediately when the child switches back to KTB
+  // from other apps — picks up any App Group minutes written by the extension.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed && _activeSessionStartTime != null) {
+      _refreshSessionBar();
+    }
   }
 
   Future<void> _loadInitialData() async {
@@ -166,16 +311,182 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (!mounted) return;
     setState(() => _usagePermissionGranted = hasPermission);
     if (!hasPermission) return;
+
+    // iOS: chart renders via UiKitView extension. For the progress bar,
+    // we use a session timer (time since app was first opened today) as
+    // a proxy for screen time — the DeviceActivityReport extension is
+    // sandboxed by Apple and cannot write data to the main app.
+    if (Platform.isIOS) {
+      _iosVendorId ??= await UsageStatsService.getVendorId();
+      final vid = _iosVendorId;
+      if (vid != null && vid.isNotEmpty && widget.role == 'child') {
+        _registerIosVendorId(vid);
+        if (_dateKey(date) == _dateKey(_todayDate())) {
+          // Today: use live platform channel data (keychain or foreground timer).
+          await _loadIosSessionMinutes(date);
+        } else {
+          // Past day: read what was uploaded to Firestore that day.
+          await _loadIosPastDayFromFirestore(vid, date);
+        }
+      }
+      return;
+    }
+
     setState(() => _usageLoading = true);
     final entries = await UsageStatsService.getDailyUsage(date);
     if (!mounted) return;
-    setState(() {
-      _usageEntries = entries;
-      _usageLoading = false;
-    });
-    if (widget.role == 'child' && entries.isNotEmpty &&
-        _dateKey(date) == _dateKey(DateTime.now())) {
-      await _uploadUsageToFirestore(date, entries);
+
+    if (entries.isNotEmpty) {
+      setState(() { _usageEntries = entries; _usageLoading = false; });
+      if (widget.role == 'child' && _dateKey(date) == _dateKey(DateTime.now())) {
+        await _uploadUsageToFirestore(date, entries);
+      }
+    } else {
+      // UsageStats returned nothing — may be beyond the device's retention window.
+      // Fall back to what was uploaded to Firestore for that day.
+      final dateKey = _dateKey(date);
+      try {
+        final doc = await FirebaseFirestore.instance
+            .collection('families').doc(widget.familyId)
+            .collection('accounts').doc(widget.accountId)
+            .collection('usageStats').doc(dateKey)
+            .get();
+        final raw = doc.data()?['apps'] as List<dynamic>?;
+        final saved = raw?.map((a) {
+          final m = Map<String, dynamic>.from(a as Map);
+          return AppUsageEntry(
+            packageName:   m['packageName']   as String? ?? '',
+            appName:       m['appName']       as String? ?? '',
+            categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+            timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
+          );
+        }).where((e) => e.timeMinutes > 0).toList() ?? [];
+        if (mounted) setState(() { _usageEntries = saved; _usageLoading = false; });
+      } catch (_) {
+        if (mounted) setState(() => _usageLoading = false);
+      }
+    }
+    if (widget.role == 'child') _checkLimitReached();
+  }
+
+  // Writes child's iOS vendorId into the family account doc so parent can look it up.
+  void _registerIosVendorId(String vendorId) {
+    FirebaseFirestore.instance
+        .collection('families').doc(widget.familyId)
+        .collection('accounts').doc(widget.accountId)
+        .set({'iosVendorId': vendorId}, SetOptions(merge: true))
+        .catchError((_) {});
+  }
+
+  // Loads iOS usage data. Tries the shared keychain first (written by the
+  // DeviceActivityReport extension with real per-category Screen Time data).
+  // Falls back to the foreground-only timer if the keychain is empty (i.e.
+  // the extension's sandbox also blocks keychain writes on this device).
+  // Only runs after the parent has set a screen-time limit.
+  Future<void> _loadIosSessionMinutes(DateTime date) async {
+    final vid = _iosVendorId;
+    if (vid == null || vid.isEmpty) return;
+    if (_lastKnownScreenTimeLimit == null || _lastKnownScreenTimeLimit! <= 0) {
+      if (mounted) setState(() => _usageEntries = []);
+      return;
+    }
+    final dateKey = _dateKey(date);
+    try {
+      // Prefer real Screen Time data from keychain (extension writes it).
+      final keychainData = await UsageStatsService.getIosUsageFromKeychain(dateKey);
+      if (!mounted) return;
+
+      List<AppUsageEntry> entries;
+      if (keychainData != null) {
+        // Extension's keychain write succeeded — use real category data.
+        final rawApps = keychainData['apps'] as List<dynamic>? ?? [];
+        entries = rawApps.map((a) {
+          final m = Map<String, dynamic>.from(a as Map);
+          return AppUsageEntry(
+            packageName:   m['packageName']   as String? ?? '',
+            appName:       m['appName']       as String? ?? '',
+            categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+            timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
+          );
+        }).where((e) => e.timeMinutes > 0).toList();
+        if (entries.isEmpty) {
+          final total = (keychainData['totalMinutes'] as num?)?.toInt() ?? 0;
+          entries = [AppUsageEntry(
+            packageName: 'com.apple.total', appName: 'iPad Screen Time',
+            categoryLabel: 'Screen Time', timeMinutes: total)];
+        }
+      } else {
+        // Fallback: foreground-only timer (counts only while KTB app is open).
+        final minutes = await UsageStatsService.getIosSessionMinutes(dateKey);
+        if (!mounted) return;
+        entries = [AppUsageEntry(
+          packageName: 'com.apple.total', appName: 'iPad Screen Time',
+          categoryLabel: 'Screen Time', timeMinutes: minutes)];
+      }
+
+      setState(() => _usageEntries = entries);
+      if (widget.role == 'child') _checkLimitReached();
+      _uploadIosUsageToFirestore(vid, dateKey, entries);
+    } catch (_) {}
+  }
+
+  // Reads a past day's iOS usage from Firestore (uploaded each day while live).
+  Future<void> _loadIosPastDayFromFirestore(String vendorId, DateTime date) async {
+    final dateKey = _dateKey(date);
+    try {
+      final doc = await FirebaseFirestore.instance
+          .collection('iosDeviceData').doc(vendorId)
+          .collection('usageStats').doc(dateKey)
+          .get();
+      if (!mounted) return;
+      final raw = doc.data()?['apps'] as List<dynamic>?;
+      final entries = raw?.map((a) {
+        final m = Map<String, dynamic>.from(a as Map);
+        return AppUsageEntry(
+          packageName:   m['packageName']   as String? ?? '',
+          appName:       m['appName']       as String? ?? '',
+          categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+          timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
+        );
+      }).where((e) => e.timeMinutes > 0).toList() ?? [];
+      setState(() => _usageEntries = entries);
+    } catch (_) {}
+  }
+
+  Future<void> _uploadIosUsageToFirestore(
+      String vendorId, String dateKey, List<AppUsageEntry> apps) async {
+    final totalMinutes = apps.fold(0, (s, e) => s + e.timeMinutes);
+    try {
+      await FirebaseFirestore.instance
+          .collection('iosDeviceData').doc(vendorId)
+          .collection('usageStats').doc(dateKey)
+          .set({
+            'apps': apps.map((e) => {
+              'packageName': e.packageName,
+              'appName': e.appName,
+              'categoryLabel': e.categoryLabel,
+              'timeMinutes': e.timeMinutes,
+            }).toList(),
+            'totalMinutes': totalMinutes,
+            'updatedAt': FieldValue.serverTimestamp(),
+          });
+    } catch (_) {}
+  }
+
+  void _checkLimitReached() {
+    final todayKey = _dateKey(_todayDate());
+    if (_limitReachedNotifiedDateKey == todayKey) return; // already notified today
+    final limit = _lastKnownScreenTimeLimit;
+    if (limit == null || limit <= 0) return;
+    if (_usedMinutes >= limit) {
+      _limitReachedNotifiedDateKey = todayKey;
+      // Notify the child immediately
+      NotificationService.showLimitReached(isParent: false);
+      // Write to Firestore so the parent's stream picks it up
+      _familySettingsRef().set({
+        'limitReachedAt': FieldValue.serverTimestamp(),
+        'limitReachedDateKey': todayKey,
+      }, SetOptions(merge: true)).catchError((_) {});
     }
   }
 
@@ -207,22 +518,55 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (childId == null) return;
     if (mounted) setState(() => _childUsageLoading = true);
     try {
-      final doc = await FirebaseFirestore.instance
+      // Always re-read the child account doc to get the latest iosVendorId —
+      // it may have been registered after this parent session started.
+      final accountDoc = await FirebaseFirestore.instance
           .collection('families').doc(widget.familyId)
           .collection('accounts').doc(childId)
-          .collection('usageStats').doc(_dateKey(date))
           .get();
+      final freshVendorId = accountDoc.data()?['iosVendorId'] as String?;
+      if (freshVendorId != null && freshVendorId.isNotEmpty) {
+        _childIosVendorId = freshVendorId;
+      }
+
+      List<AppUsageEntry> apps = [];
+
+      if (_childIosVendorId != null && _childIosVendorId!.isNotEmpty) {
+        // iOS child — read from iosDeviceData (uploaded by DeviceActivityReport extension)
+        final doc = await FirebaseFirestore.instance
+            .collection('iosDeviceData').doc(_childIosVendorId)
+            .collection('usageStats').doc(_dateKey(date))
+            .get();
+        final data = doc.data();
+        apps = (data?['apps'] as List<dynamic>?)?.map((a) {
+          final m = Map<String, dynamic>.from(a as Map);
+          return AppUsageEntry(
+            packageName:   m['packageName']   as String? ?? '',
+            appName:       m['appName']       as String? ?? '',
+            categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+            timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
+          );
+        }).toList() ?? [];
+      } else {
+        // Android child — read from families/.../usageStats/
+        final doc = await FirebaseFirestore.instance
+            .collection('families').doc(widget.familyId)
+            .collection('accounts').doc(childId)
+            .collection('usageStats').doc(_dateKey(date))
+            .get();
+        final raw = doc.data()?['apps'] as List<dynamic>?;
+        apps = raw?.map((a) {
+          final m = Map<String, dynamic>.from(a as Map);
+          return AppUsageEntry(
+            packageName:   m['packageName']   as String? ?? '',
+            appName:       m['appName']       as String? ?? '',
+            categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+            timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
+          );
+        }).toList() ?? [];
+      }
+
       if (!mounted) return;
-      final raw = doc.data()?['apps'] as List<dynamic>?;
-      final apps = raw?.map((a) {
-        final m = Map<String, dynamic>.from(a as Map);
-        return AppUsageEntry(
-          packageName: m['packageName'] as String? ?? '',
-          appName: m['appName'] as String? ?? '',
-          categoryLabel: m['categoryLabel'] as String? ?? 'Other',
-          timeMinutes: (m['timeMinutes'] as num?)?.toInt() ?? 0,
-        );
-      }).toList() ?? [];
       setState(() { _childUsageEntries = apps; _childUsageLoading = false; });
     } catch (_) {
       if (mounted) setState(() => _childUsageLoading = false);
@@ -244,7 +588,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           .limit(1)
           .get();
       if (snap.docs.isNotEmpty && mounted) {
-        setState(() => _childAccountId = snap.docs.first.id);
+        final doc = snap.docs.first;
+        final iosVid = doc.data()['iosVendorId'] as String?;
+        setState(() {
+          _childAccountId = doc.id;
+          _childIosVendorId = iosVid;
+        });
       }
     } catch (_) {}
   }
@@ -460,6 +809,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             'body': '$minsLeft minutes of screen time left today.',
             'type': 'screen_time_reminder',
             'targetRole': widget.role,
+            'dateKey': _dateKey(_todayDate()),
             'sentAt': Timestamp.fromDate(fireAt),
           });
         } catch (_) {}
@@ -588,7 +938,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     familyId: widget.familyId,
                     childAccountId: widget.accountId,
                   ),
-            const _SessionPlaceholder(),
+            SessionTab(
+              familyId:         widget.familyId,
+              role:             widget.role,
+              childAccountId:   _childAccountId,
+              childIosVendorId: _childIosVendorId,
+            ),
           ],
         ),
         bottomNavigationBar: _buildBottomNav(),
@@ -628,6 +983,38 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // ── screen time bar ───────────────────────────────────────────────────────
 
   Widget _buildScreenTimeBar() {
+    // Also listen to the dashboard_days doc written by the KtbActivityMonitor extension
+    // (via Firestore REST API). This gives live minutes even when KTB is closed.
+    final todayKey = _dateKey(_todayDate());
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      key: ValueKey('dashday_$todayKey'),
+      stream: _selectedDate == _todayDate()
+          ? _getDashDayStream(todayKey)
+          : null,
+      builder: (ctx, daySnap) {
+        if (daySnap.connectionState == ConnectionState.active) {
+          final mins = daySnap.data?.data()?['screenTimeUsedMinutes'] as int?;
+          if (mins != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              if (_sessionResetPending) {
+                // Waiting for the session-start reset to propagate through Firestore.
+                // Ignore stale cached values > 0 until we see the confirmed 0.
+                if (mins == 0) setState(() => _sessionResetPending = false);
+              } else if (mins > _firestoreScreenTimeMinutes ||
+                  (mins == 0 && _firestoreScreenTimeMinutes > 0)) {
+                // Only call setState when the value actually changes.
+                setState(() => _firestoreScreenTimeMinutes = mins);
+              }
+            });
+          }
+        }
+        return _buildSettingsStream();
+      },
+    );
+  }
+
+  Widget _buildSettingsStream() {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: _settingsStream,
       builder: (ctx, snap) {
@@ -652,9 +1039,107 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 duration: const Duration(seconds: 3),
                 behavior: SnackBarBehavior.floating,
               ));
+              // Reset the iOS foreground timer only when the parent sets a limit
+              // for the FIRST time today (null → value). When changing an existing
+              // limit mid-session the used minutes stay the same; only the
+              // denominator changes so the bar recalculates automatically.
+              if (Platform.isIOS && widget.role == 'child' &&
+                  _lastKnownScreenTimeLimit == null) {
+                UsageStatsService.resetIosSessionCounter(_dateKey(_todayDate()));
+              }
             });
           }
-          if (limit != null) _lastKnownScreenTimeLimit = limit;
+          // Track active session start time so the screen time bar shows
+          // session elapsed time instead of all-day usage.
+          final sessionStartMillis = data?['activeSessionStartMillis'] as int?;
+          final newStart = sessionStartMillis != null
+              ? DateTime.fromMillisecondsSinceEpoch(sessionStartMillis)
+              : null;
+          if (newStart != _activeSessionStartTime) {
+            _activeSessionStartTime = newStart;
+            // Start or stop the 30-second redraw timer that keeps the bar current.
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              _sessionPollTimer?.cancel();
+              if (newStart != null) {
+                // Reset local + Firestore minutes so the bar starts at 0.
+                // Mark reset pending so the stream ignores any stale cached
+                // values until Firestore confirms the 0 write.
+                _firestoreScreenTimeMinutes = 0;
+                _nativeSessionMinutes = 0;
+                _extensionHasFired = false;
+                _sessionResetPending = true;
+                FirebaseFirestore.instance
+                    .collection('families').doc(widget.familyId)
+                    .collection('dashboard_days').doc(_dateKey(_todayDate()))
+                    .set({'screenTimeUsedMinutes': 0}, SetOptions(merge: true));
+                // Tell the native layer the session start time so it can
+                // compute lock-aware elapsed minutes without needing KTB open.
+                if (Platform.isIOS && widget.role == 'child') {
+                  UsageStatsService.startSessionTimer(newStart.millisecondsSinceEpoch);
+                }
+                _sessionPollTimer = Timer.periodic(
+                    const Duration(seconds: 30), (_) => _refreshSessionBar());
+                _refreshSessionBar(); // immediate first redraw
+              } else {
+                if (Platform.isIOS && widget.role == 'child') {
+                  UsageStatsService.clearSessionTimer();
+                }
+                _sessionPollTimer = null;
+              }
+            });
+          }
+
+          if (limit != null) {
+            final hadLimit = _lastKnownScreenTimeLimit != null && _lastKnownScreenTimeLimit! > 0;
+            _lastKnownScreenTimeLimit = limit;
+            if (widget.role == 'child') _checkLimitReached();
+            if (Platform.isIOS && widget.role == 'child') {
+              // Only restart DeviceActivity monitoring when the session+limit
+              // combination actually changes. Restarting on every stream event
+              // clears the App Group counter and prevents the extension from
+              // accumulating minutes across the session.
+              final activeMs = _activeSessionStartTime?.millisecondsSinceEpoch;
+              final monKey = '${activeMs}_$limit';
+              if (_monitoringKey != monKey && activeMs != null) {
+                _monitoringKey = monKey;
+                UsageStatsService.startScreenTimeMonitoring(
+                  limitMinutes: limit,
+                  dateKey: _dateKey(_todayDate()),
+                  familyId: widget.familyId,
+                ).then((ok) {
+                  if (!ok && mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('Screen time monitoring failed to start — bar may be inaccurate'),
+                      duration: Duration(seconds: 5),
+                      behavior: SnackBarBehavior.floating,
+                    ));
+                  }
+                });
+              }
+              if (!hadLimit && _iosVendorId != null) {
+                // Limit just became available — load immediately instead of
+                // waiting for the next 1-minute timer tick.
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) _loadIosSessionMinutes(_selectedDate);
+                });
+              }
+            }
+          }
+
+          // Notify parent when child reaches their limit
+          if (_settingsStreamInitialized && widget.role == 'parent') {
+            final reachedAt = data?['limitReachedAt'] as Timestamp?;
+            final reachedDateKey = data?['limitReachedDateKey'] as String?;
+            final todayKey = _dateKey(_todayDate());
+            if (reachedAt != null &&
+                reachedDateKey == todayKey &&
+                _limitReachedNotifiedDateKey != todayKey) {
+              _limitReachedNotifiedDateKey = todayKey;
+              NotificationService.showLimitReached(isParent: true);
+            }
+          }
+
           _settingsStreamInitialized = true;
           return _buildScreenTimeBarContent(limit);
         }
@@ -1122,12 +1607,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
           SizedBox(
             height: _s(110.0, 180.0),
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+              key: ValueKey('notifs_${_dateKey(_selectedDate)}'),
               stream: FirebaseFirestore.instance
                   .collection('families').doc(widget.familyId)
                   .collection('notifications')
                   .where('targetRole', isEqualTo: widget.role)
-                  .orderBy('sentAt', descending: true)
-                  .limit(20)
+                  .limit(50)
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.hasError) {
@@ -1136,7 +1621,24 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     fontFamily: 'PlusJakartaSans',
                   ));
                 }
-                final docs = snap.data?.docs ?? [];
+                // Filter by sentAt date in Dart so older docs without a dateKey
+                // field are still shown when the user browses past days.
+                final sel = _selectedDate;
+                final docs = (snap.data?.docs ?? [])
+                    .where((doc) {
+                      final ts = doc.data()['sentAt'] as Timestamp?;
+                      if (ts == null) return false;
+                      final dt = ts.toDate();
+                      return dt.year == sel.year &&
+                             dt.month == sel.month &&
+                             dt.day == sel.day;
+                    })
+                    .toList()
+                  ..sort((a, b) {
+                    final ta = (a.data()['sentAt'] as Timestamp?)?.seconds ?? 0;
+                    final tb = (b.data()['sentAt'] as Timestamp?)?.seconds ?? 0;
+                    return tb.compareTo(ta);
+                  });
                 if (docs.isEmpty) {
                   return Center(child: Text('No notifications yet', style: TextStyle(
                     fontFamily: 'PlusJakartaSans',
@@ -1341,7 +1843,50 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
-    final entries = _activeEntries;
+    // ── iOS: embed the DeviceActivityReport extension as a platform view ─────
+    if (Platform.isIOS) {
+      return Container(
+        padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
+        decoration: _cardDecoration(),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            titleRow,
+            SizedBox(height: _s(16, 24)),
+            SizedBox(
+              height: chartH + _s(30, 46),
+              child: UiKitView(
+                key: ValueKey(_selectedDate.millisecondsSinceEpoch),
+                viewType: 'ktb_screen_time_chart',
+                layoutDirection: TextDirection.ltr,
+                creationParams: {
+                  'dateMillis': _selectedDate.millisecondsSinceEpoch,
+                },
+                creationParamsCodec: const StandardMessageCodec(),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    // ── Android ───────────────────────────────────────────────────────────────
+    // Aggregate sessions by package so each app gets one bar.
+    final Map<String, int> _pkgTotals = {};
+    final Map<String, String> _pkgNames = {};
+    for (final e in _activeEntries) {
+      _pkgTotals[e.packageName] = (_pkgTotals[e.packageName] ?? 0) + e.timeMinutes;
+      _pkgNames[e.packageName] = e.appName;
+    }
+    final entries = (_pkgTotals.entries
+        .map((kv) => AppUsageEntry(
+              packageName: kv.key,
+              appName: _pkgNames[kv.key] ?? kv.key,
+              categoryLabel: 'Other',
+              timeMinutes: kv.value,
+            ))
+        .toList()
+      ..sort((a, b) => b.timeMinutes.compareTo(a.timeMinutes)));
     if (entries.isEmpty) {
       return Container(
         padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
@@ -1359,7 +1904,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       );
     }
 
-    final maxTime  = entries.map((e) => e.timeMinutes).reduce((a, b) => a > b ? a : b);
+    final maxTime   = entries.map((e) => e.timeMinutes).reduce((a, b) => a > b ? a : b);
     final displayed = entries.take(6).toList();
 
     return Container(
@@ -1376,9 +1921,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
               crossAxisAlignment: CrossAxisAlignment.end,
               children: displayed.map((entry) {
                 final ratio = maxTime > 0 ? entry.timeMinutes / maxTime : 0.0;
-                final label = entry.appName.length > 6
-                    ? entry.appName.substring(0, 6)
-                    : entry.appName;
+                // For iOS total-time entries use a short readable label.
+                // For regular app names take the first word (max 8 chars).
+                final label = entry.packageName == 'com.apple.total'
+                    ? 'Screen\nTime'
+                    : (() {
+                        final words = entry.appName.split(' ');
+                        final first = words.first;
+                        return first.length <= 8 ? first : first.substring(0, 8);
+                      })();
                 return Padding(
                   padding: EdgeInsets.only(right: _s(10, 16)),
                   child: Column(
@@ -1432,7 +1983,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
         (showingFirestoreData || (nativeOk && _usagePermissionGranted));
 
     List<Widget> rows;
-    if (!hasData) {
+    if (Platform.isIOS && _usagePermissionGranted && widget.role == 'child' && _activeEntries.isEmpty) {
+      // Child's iOS data loads from Firestore after extension uploads (~25s delay)
+      rows = [Text('Category data loading… check back shortly.',
+          style: TextStyle(fontFamily: 'PlusJakartaSans',
+              fontStyle: FontStyle.italic, fontSize: _s(12, 19), color: _textLight))];
+    } else if (!hasData) {
       final msg = !nativeOk && !showingFirestoreData
           ? 'Not available on this device.'
           : !_usagePermissionGranted && !showingFirestoreData
@@ -3015,19 +3571,3 @@ extension _SortedList on List<int> {
 // Session placeholder
 // ══════════════════════════════════════════════════════════════════════════════
 
-class _SessionPlaceholder extends StatelessWidget {
-  const _SessionPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return const SafeArea(
-      child: Center(
-        child: Text(
-          'Session\ncoming soon',
-          textAlign: TextAlign.center,
-          style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 20, color: Color(0xFF4A4A6A)),
-        ),
-      ),
-    );
-  }
-}

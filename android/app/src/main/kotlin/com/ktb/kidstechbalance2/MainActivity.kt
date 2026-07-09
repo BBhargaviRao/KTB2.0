@@ -2,6 +2,7 @@ package com.ktb.kidstechbalance2
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -94,6 +95,40 @@ class MainActivity : FlutterActivity() {
                                 runOnUiThread { result.error("ERROR", e.message, null) }
                             }
                         }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "ktb2/blocking")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "hasOverlayPermission" -> {
+                        result.success(Settings.canDrawOverlays(this))
+                    }
+                    "requestOverlayPermission" -> {
+                        val intent = Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            Uri.parse("package:$packageName")
+                        )
+                        startActivity(intent)
+                        result.success(null)
+                    }
+                    "startBlockingService" -> {
+                        val packages = call.argument<List<String>>("allowedPackages") ?: emptyList()
+                        val intent = Intent(this, AppBlockerService::class.java).apply {
+                            putStringArrayListExtra("allowedPackages", ArrayList(packages))
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(intent)
+                        } else {
+                            startService(intent)
+                        }
+                        result.success(null)
+                    }
+                    "stopBlockingService" -> {
+                        stopService(Intent(this, AppBlockerService::class.java))
+                        result.success(null)
                     }
                     else -> result.notImplemented()
                 }

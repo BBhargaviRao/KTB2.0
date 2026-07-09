@@ -16,8 +16,9 @@ class AppUsageEntry {
 }
 
 class UsageStatsService {
-  static const _androidChannel = MethodChannel('ktb2/usage_stats');
-  static const _iosChannel     = MethodChannel('ktb2/screen_time');
+  static const _androidChannel  = MethodChannel('ktb2/usage_stats');
+  static const _iosChannel      = MethodChannel('ktb2/screen_time');
+  static const _blockingChannel = MethodChannel('ktb2/blocking');
 
   static Future<bool> hasPermission() async {
     try {
@@ -227,6 +228,46 @@ class UsageStatsService {
       if (e.code == 'NO_PERMISSION') return [];
     } catch (_) {}
     return [];
+  }
+
+  // Android only — checks if the overlay (draw-over-other-apps) permission is granted.
+  static Future<bool> hasOverlayPermission() async {
+    if (!Platform.isAndroid) return false;
+    try {
+      return await _blockingChannel.invokeMethod<bool>('hasOverlayPermission') ?? false;
+    } catch (_) {}
+    return false;
+  }
+
+  // Android only — opens the system overlay permission settings screen.
+  static Future<void> requestOverlayPermission() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _blockingChannel.invokeMethod('requestOverlayPermission');
+    } catch (_) {}
+  }
+
+  // Android only — starts AppBlockerService with the given allowed package names.
+  // Everything not in [allowedPackages] (plus KTB itself) will be blocked.
+  static Future<void> startBlockingService(List<String> allowedPackages) async {
+    if (!Platform.isAndroid) return;
+    try {
+      final hasOverlay = await hasOverlayPermission();
+      if (!hasOverlay) {
+        await requestOverlayPermission();
+      }
+      await _blockingChannel.invokeMethod('startBlockingService', {
+        'allowedPackages': allowedPackages,
+      });
+    } catch (_) {}
+  }
+
+  // Android only — stops AppBlockerService and removes any active overlay.
+  static Future<void> stopBlockingService() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await _blockingChannel.invokeMethod('stopBlockingService');
+    } catch (_) {}
   }
 
   /// Groups entries by category, sorted by total time descending.

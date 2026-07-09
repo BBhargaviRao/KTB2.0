@@ -75,6 +75,9 @@ class _SessionTabState extends State<SessionTab> {
   // Prevents re-applying on every build while session is active.
   String? _appliedRestrictionsForSession;
 
+  // Tracks which session the Android blocking service is running for.
+  String? _blockingServiceSessionId;
+
   @override
   void initState() {
     super.initState();
@@ -305,6 +308,25 @@ class _SessionTabState extends State<SessionTab> {
         // Reset popup tracker when no active session
         if (activeDoc == null && overrideDoc == null) {
           _shownPopupForSessionId = null;
+        }
+
+        // Android child: start/stop AppBlockerService when session goes active/ends.
+        // Use Future.microtask (not addPostFrameCallback) so it fires even when
+        // Flutter is backgrounded behind the overlay.
+        if (Platform.isAndroid && widget.role == 'child') {
+          final newActiveId = activeDoc?.id;
+          if (newActiveId != null && _blockingServiceSessionId != newActiveId) {
+            _blockingServiceSessionId = newActiveId;
+            final allowedPackages = (activeDoc!.data()['allowedApps'] as List<dynamic>? ?? [])
+                .map((a) => (a as Map)['packageName'] as String? ?? '')
+                .where((s) => s.isNotEmpty)
+                .toList();
+            Future.microtask(() => UsageStatsService.startBlockingService(allowedPackages));
+          } else if (newActiveId == null && overrideDoc == null &&
+              _blockingServiceSessionId != null) {
+            _blockingServiceSessionId = null;
+            Future.microtask(() => UsageStatsService.stopBlockingService());
+          }
         }
 
         // iOS child: apply ManagedSettings restrictions when session goes active;
@@ -835,6 +857,12 @@ class _ChildAppPickerCardState extends State<_ChildAppPickerCard> {
 
   Future<void> _launchIosPicker() async {
     setState(() { _iosPickerLoading = true; _iosPickerConfirmed = false; });
+    // Family Controls authorization is required for the picker's selection to
+    // actually enforce ManagedSettings shields — request it explicitly rather
+    // than relying on the (currently unreachable) hidden "Grant Access" button.
+    if (!await UsageStatsService.hasPermission()) {
+      await UsageStatsService.requestPermission();
+    }
     final confirmed = await UsageStatsService.showFamilyActivityPicker();
     if (mounted) setState(() { _iosPickerLoading = false; _iosPickerConfirmed = confirmed; });
   }
@@ -1222,6 +1250,7 @@ class _ActiveCard extends StatefulWidget {
 class _ActiveCardState extends State<_ActiveCard> {
   Timer? _timer;
   Duration _remaining = Duration.zero;
+  bool _expanded = false;
 
   @override
   void initState() { super.initState(); _tick(); _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick()); }
@@ -1259,6 +1288,7 @@ class _ActiveCardState extends State<_ActiveCard> {
     final tasks    = data['tasks']       as List<dynamic>? ?? [];
     final allowed  = data['allowedApps'] as List<dynamic>? ?? [];
     final blocked  = data['blockedApps'] as List<dynamic>? ?? [];
+    final iosNative = data['iosNativeSelection'] as bool? ?? false;
 
     return Container(
       padding: const EdgeInsets.all(20),
@@ -1267,76 +1297,111 @@ class _ActiveCardState extends State<_ActiveCard> {
         boxShadow: [BoxShadow(color: _purple.withValues(alpha: 0.10), blurRadius: 20, offset: const Offset(0, 6))],
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Status
-        Row(children: [
-          Container(width: 9, height: 9,
-              decoration: BoxDecoration(color: expired ? Colors.orange : _green, shape: BoxShape.circle)),
-          const SizedBox(width: 7),
-          Text(expired ? "Time's Up" : 'Active Session',
-              style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
-                  fontSize: 12, color: expired ? Colors.orange : _green, letterSpacing: 0.4)),
-          const Spacer(),
-          Text('${TimeOfDay.fromDateTime(start).format(context)} – ${TimeOfDay.fromDateTime(end).format(context)}',
-              style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
-        ]),
-        const SizedBox(height: 16),
-
-        // Countdown
-        Center(child: Text(_countdown, style: TextStyle(fontFamily: 'PlusJakartaSans',
-            fontWeight: FontWeight.w800, fontSize: 58,
-            color: expired ? Colors.orange : _textDark, letterSpacing: -2))),
-        Center(child: Text(expired ? 'Session finished' : 'remaining',
-            style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 13, color: _textMid))),
-        const SizedBox(height: 18),
-
-        // Progress bar
-        ClipRRect(borderRadius: BorderRadius.circular(8),
-          child: LinearProgressIndicator(value: progress, minHeight: 10,
-            backgroundColor: _purpleLight, valueColor: AlwaysStoppedAnimation(accent))),
-        const SizedBox(height: 18),
-
-        // Tasks
-        if (tasks.isNotEmpty) ...[
-          const Text('Tasks', style: TextStyle(fontFamily: 'PlusJakartaSans',
-              fontWeight: FontWeight.w600, fontSize: 13, color: _textDark)),
-          const SizedBox(height: 8),
-          ...tasks.map((t) {
-            final m = t as Map<String, dynamic>;
-            final done = m['done'] as bool? ?? false;
-            return Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [
-              Icon(done ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
-                  size: 16, color: done ? _green : _textMid),
-              const SizedBox(width: 8),
-              Expanded(child: Text('${m['text']}', style: TextStyle(fontFamily: 'PlusJakartaSans',
-                  fontSize: 13, color: done ? _textMid : _textDark,
-                  decoration: done ? TextDecoration.lineThrough : null))),
-              Text('${m['durationMinutes'] ?? 0}m',
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () => setState(() => _expanded = !_expanded),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            // Status
+            Row(children: [
+              Container(width: 9, height: 9,
+                  decoration: BoxDecoration(color: expired ? Colors.orange : _green, shape: BoxShape.circle)),
+              const SizedBox(width: 7),
+              Text(expired ? "Time's Up" : 'Active Session',
+                  style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
+                      fontSize: 12, color: expired ? Colors.orange : _green, letterSpacing: 0.4)),
+              const Spacer(),
+              Text('${TimeOfDay.fromDateTime(start).format(context)} – ${TimeOfDay.fromDateTime(end).format(context)}',
                   style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
-            ]));
-          }),
-          const SizedBox(height: 12),
-        ],
+              const SizedBox(width: 6),
+              Icon(_expanded ? Icons.expand_less : Icons.expand_more, color: _textMid, size: 18),
+            ]),
+            const SizedBox(height: 16),
 
-        // App summary
-        if (allowed.isNotEmpty || blocked.isNotEmpty) ...[
-          Row(children: [
-            if (allowed.isNotEmpty) Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Allowed (${allowed.length})', style: const TextStyle(fontFamily: 'PlusJakartaSans',
-                  fontWeight: FontWeight.w600, fontSize: 12, color: _green)),
-              const SizedBox(height: 3),
-              Text(allowed.take(3).map((a) => (a as Map)['appName']).join(', ') + (allowed.length > 3 ? '…' : ''),
-                  style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
-            ])),
-            if (blocked.isNotEmpty) Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Blocked (${blocked.length})', style: TextStyle(fontFamily: 'PlusJakartaSans',
-                  fontWeight: FontWeight.w600, fontSize: 12, color: Colors.red.shade400)),
-              const SizedBox(height: 3),
-              Text(blocked.take(3).map((a) => (a as Map)['appName']).join(', ') + (blocked.length > 3 ? '…' : ''),
-                  style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
-            ])),
+            // Countdown
+            Center(child: Text(_countdown, style: TextStyle(fontFamily: 'PlusJakartaSans',
+                fontWeight: FontWeight.w800, fontSize: 58,
+                color: expired ? Colors.orange : _textDark, letterSpacing: -2))),
+            Center(child: Text(expired ? 'Session finished' : 'remaining',
+                style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 13, color: _textMid))),
+            const SizedBox(height: 18),
+
+            // Progress bar
+            ClipRRect(borderRadius: BorderRadius.circular(8),
+              child: LinearProgressIndicator(value: progress, minHeight: 10,
+                backgroundColor: _purpleLight, valueColor: AlwaysStoppedAnimation(accent))),
+            const SizedBox(height: 18),
+
+            // Tasks
+            if (tasks.isNotEmpty) ...[
+              const Text('Tasks', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                  fontWeight: FontWeight.w600, fontSize: 13, color: _textDark)),
+              const SizedBox(height: 8),
+              ...tasks.map((t) {
+                final m = t as Map<String, dynamic>;
+                final done = m['done'] as bool? ?? false;
+                return Padding(padding: const EdgeInsets.only(bottom: 6), child: Row(children: [
+                  Icon(done ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+                      size: 16, color: done ? _green : _textMid),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text('${m['text']}', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                      fontSize: 13, color: done ? _textMid : _textDark,
+                      decoration: done ? TextDecoration.lineThrough : null))),
+                  Text('${m['durationMinutes'] ?? 0}m',
+                      style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
+                ]));
+              }),
+              const SizedBox(height: 12),
+            ],
+
+            // App summary — iOS sessions never populate allowedApps/blockedApps
+            // in Firestore. Apple's FamilyActivityPicker/ApplicationToken never
+            // exposes app names/icons to the main app process outside the
+            // picker's own UI or a ShieldConfiguration extension (neither of
+            // which can be used here), so there is no way to list the actual
+            // apps — only acknowledge that a selection was made natively.
+            if (iosNative) ...[
+              const Text('APP ACCESS', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                  fontWeight: FontWeight.w600, fontSize: 11, color: _textMid, letterSpacing: 0.8)),
+              const SizedBox(height: 8),
+              const Text(
+                  "Apps were selected via iOS Screen Time. Apple doesn't allow "
+                  'app names to be shown outside the picker — everything not '
+                  'selected is blocked for this session.',
+                  style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12, color: _textMid)),
+              const SizedBox(height: 16),
+            ] else if (allowed.isNotEmpty || blocked.isNotEmpty) ...[
+              if (!_expanded)
+                Row(children: [
+                  if (allowed.isNotEmpty) Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Allowed (${allowed.length})', style: const TextStyle(fontFamily: 'PlusJakartaSans',
+                        fontWeight: FontWeight.w600, fontSize: 12, color: _green)),
+                    const SizedBox(height: 3),
+                    Text(allowed.take(3).map((a) => (a as Map)['appName']).join(', ') + (allowed.length > 3 ? '…' : ''),
+                        style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
+                  ])),
+                  if (blocked.isNotEmpty) Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text('Blocked (${blocked.length})', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                        fontWeight: FontWeight.w600, fontSize: 12, color: Colors.red.shade400)),
+                    const SizedBox(height: 3),
+                    Text(blocked.take(3).map((a) => (a as Map)['appName']).join(', ') + (blocked.length > 3 ? '…' : ''),
+                        style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
+                  ])),
+                ])
+              else ...[
+                const Text('APP ACCESS', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                    fontWeight: FontWeight.w600, fontSize: 11, color: _textMid, letterSpacing: 0.8)),
+                const SizedBox(height: 8),
+                if (allowed.isNotEmpty)
+                  _AppChips(label: 'Allowed', apps: allowed,
+                      fg: _green, bg: const Color(0xFFE8F5E9)),
+                if (blocked.isNotEmpty)
+                  _AppChips(label: 'Blocked', apps: blocked,
+                      fg: Colors.red.shade400, bg: const Color(0xFFFFEBEE)),
+              ],
+              const SizedBox(height: 16),
+            ],
           ]),
-          const SizedBox(height: 16),
-        ],
+        ),
 
         // Action buttons
         if (widget.role == 'parent')

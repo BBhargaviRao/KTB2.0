@@ -18,7 +18,11 @@ extension DeviceActivityName {
 // ── FamilyActivityPicker hosting ─────────────────────────────────────────────
 @available(iOS 16.0, *)
 class FamilyPickerVM: ObservableObject {
-  @Published var selection          = FamilyActivitySelection()
+  // includeEntireCategory: true makes picking a whole category populate
+  // applicationTokens with every app currently in it (not just an abstract
+  // categoryToken) — required because .all(except:) can only exempt individual
+  // ApplicationTokens. Matches ~/Desktop/Kids Tech Balance/Kids_Tech_BalanceApp.swift.
+  @Published var selection          = FamilyActivitySelection(includeEntireCategory: true)
   @Published var isPickerPresented  = false
   var onConfirm: (() -> Void)?
   var onCancel:  (() -> Void)?
@@ -150,6 +154,19 @@ struct FamilyPickerScreen: View {
   ) -> Bool {
 
     let controller = window?.rootViewController as! FlutterViewController
+
+    // Request Family Controls authorization at launch, matching the proven
+    // pattern in ~/Desktop/Kids Tech Balance/Kids_Tech_BalanceApp.swift —
+    // don't rely solely on a lazy request right before the picker opens.
+    if #available(iOS 16.0, *) {
+      Task { @MainActor in
+        do {
+          try await AuthorizationCenter.shared.requestAuthorization(for: .individual)
+        } catch {
+          print("KTB: Family Controls authorization failed at launch: \(error)")
+        }
+      }
+    }
 
     // ── Screen Time channel ────────────────────────────────────────────────
     FlutterMethodChannel(name: "ktb2/screen_time", binaryMessenger: controller.binaryMessenger)
@@ -337,18 +354,16 @@ struct FamilyPickerScreen: View {
                let sel  = try? JSONDecoder().decode(FamilyActivitySelection.self, from: data) {
               let store = ManagedSettingsStore()
               store.clearAllSettings()
-              if !sel.applicationTokens.isEmpty {
-                // ManagedSettings only supports allow-listing by ApplicationToken.
-                // ActivityCategoryToken (from category picks) is not accepted by
-                // applicationCategories.all(except:) — it only takes ApplicationToken.
-                // When the parent picked specific apps, block everything except those.
-                store.shield.applicationCategories = .all(except: sel.applicationTokens)
-                if sel.webDomainTokens.isEmpty {
-                  store.shield.webDomainCategories = .all()
-                }
-              }
-              // If only categories were selected (applicationTokens empty), the parent
-              // intends "allow all" — leave clearAllSettings() in effect (no shields).
+              // ManagedSettings only supports allow-listing by ApplicationToken.
+              // ActivityCategoryToken (from category picks) is not accepted by
+              // applicationCategories.all(except:) — it only takes ApplicationToken.
+              // Block everything except the specifically-selected apps. Apply this
+              // unconditionally (even if applicationTokens is empty, i.e. only
+              // categories were picked) — matching the proven-working reference
+              // implementation in ~/Desktop/Kids Tech Balance/Models/DataModel.swift,
+              // which never skips shielding based on token-set emptiness.
+              store.shield.applicationCategories = .all(except: sel.applicationTokens)
+              store.shield.webDomainCategories = .all()
               result(true)
             } else {
               result(false)

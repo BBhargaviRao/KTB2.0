@@ -112,6 +112,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // Fires every 30 s while a session is active to redraw the bar.
   Timer? _sessionPollTimer;
 
+  // Weekly screen time (dateKey → minutes) and mood for the bar chart
+  Map<String, int> _weekScreenTimeMinutes = {};
+  Map<String, String> _parentChartMoods = {};
+
   // Screen time minutes to show on the bar.
   // 1. Firestore extension data (session-specific, works for both child & parent).
   // 2. Native screen-lock-aware timer for iOS child (first ~5 min before extension fires).
@@ -303,6 +307,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     if (widget.role == 'parent') {
       await _loadChildUsageFromFirestore(_todayDate());
     }
+    await _loadWeekData();
   }
 
   Future<void> _loadUsageStats(DateTime date) async {
@@ -531,6 +536,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
       List<AppUsageEntry> apps = [];
 
+      // A child's account may carry a stale iosVendorId from earlier testing on a
+      // different platform. Don't trust its mere presence — try the iOS path but
+      // fall back to the Android path if it has no data for this date.
       if (_childIosVendorId != null && _childIosVendorId!.isNotEmpty) {
         // iOS child — read from iosDeviceData (uploaded by DeviceActivityReport extension)
         final doc = await FirebaseFirestore.instance
@@ -547,7 +555,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
           );
         }).toList() ?? [];
-      } else {
+      }
+
+      if (apps.isEmpty) {
         // Android child — read from families/.../usageStats/
         final doc = await FirebaseFirestore.instance
             .collection('families').doc(widget.familyId)
@@ -621,6 +631,74 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     } catch (_) {}
   }
 
+  Future<void> _loadWeekData() async {
+    await Future.wait([
+      _loadWeekScreenTime(),
+      if (widget.role == 'parent') _loadParentChartMoods(_selectedDate),
+    ]);
+  }
+
+  Future<void> _loadWeekScreenTime() async {
+    final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
+    final today = _todayDate();
+    final childAccountId = widget.role == 'child' ? widget.accountId : _childAccountId;
+    final iosVid = widget.role == 'child' ? _iosVendorId : _childIosVendorId;
+
+    final futures = List.generate(7, (i) async {
+      final day = monday.add(Duration(days: i));
+      if (day.isAfter(today)) return MapEntry(_dateKey(day), 0);
+      final key = _dateKey(day);
+
+      if (iosVid != null && iosVid.isNotEmpty) {
+        try {
+          final doc = await FirebaseFirestore.instance
+              .collection('iosDeviceData').doc(iosVid)
+              .collection('usageStats').doc(key).get();
+          final total = doc.data()?['totalMinutes'] as int?;
+          if (total != null && total > 0) return MapEntry(key, total);
+        } catch (_) {}
+      }
+
+      if (childAccountId != null) {
+        try {
+          final doc = await FirebaseFirestore.instance
+              .collection('families').doc(widget.familyId)
+              .collection('accounts').doc(childAccountId)
+              .collection('usageStats').doc(key).get();
+          final total = doc.data()?['totalMinutes'] as int?;
+          if (total != null && total > 0) return MapEntry(key, total);
+        } catch (_) {}
+      }
+
+      return MapEntry(key, 0);
+    });
+
+    final results = await Future.wait(futures);
+    if (mounted) setState(() => _weekScreenTimeMinutes = Map.fromEntries(results));
+  }
+
+  Future<void> _loadParentChartMoods(DateTime anyDayInWeek) async {
+    if (widget.role != 'parent' || _childAccountId == null) return;
+    final monday = anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday - 1));
+    final sunday = monday.add(const Duration(days: 6));
+    try {
+      final snap = await FirebaseFirestore.instance
+          .collection('families').doc(widget.familyId)
+          .collection('accounts').doc(_childAccountId!)
+          .collection('dailyData')
+          .where(FieldPath.documentId, isGreaterThanOrEqualTo: _dateKey(monday))
+          .where(FieldPath.documentId, isLessThanOrEqualTo: _dateKey(sunday))
+          .get();
+      if (!mounted) return;
+      final moods = <String, String>{};
+      for (final doc in snap.docs) {
+        final mood = doc.data()['mood'] as String?;
+        if (mood != null) moods[doc.id] = mood;
+      }
+      setState(() => _parentChartMoods = moods);
+    } catch (_) {}
+  }
+
   Future<void> _persistMood(String dateKey, String emoji) async {
     try {
       await _dailyRef(dateKey).set({
@@ -670,10 +748,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           final prevMonday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
           final newMonday  = d.subtract(Duration(days: d.weekday - 1));
           setState(() => _selectedDate = d);
-          // Todos are handled by StreamBuilder — no manual load needed.
-          // Child: reload moods if we crossed into a different week.
-          if (widget.role == 'child' && newMonday != prevMonday) {
-            await _loadWeekMoods(d);
+          if (newMonday != prevMonday) {
+            if (widget.role == 'child') await _loadWeekMoods(d);
+            await _loadWeekData();
           }
           await _loadUsageStats(d);
           if (widget.role == 'parent') await _loadChildUsageFromFirestore(d);
@@ -832,13 +909,12 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             sliver: SliverList(
               delegate: SliverChildListDelegate([
                 _buildHeader(),
-                SizedBox(height: vGap + 4),
-                // 1 · Date bar
-                _buildCalendarTile(),
                 SizedBox(height: vGap),
-                // 2 · Screen time bar
-                _buildScreenTimeBar(),
+                // 1 · Weekly overview: day selector + screen time bars + mood
+                _buildWeeklyOverviewChart(),
                 SizedBox(height: vGap),
+                // Keep screen time streams active for session tracking (hidden)
+                Offstage(offstage: true, child: _buildScreenTimeBar()),
                 // 3 · Adaptive layout: phone vs tablet
                 if (_isTablet) ...[
                   // Tablet: To-do + Mood stacked left | Nudge right
@@ -954,28 +1030,63 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // ── header ────────────────────────────────────────────────────────────────
 
   Widget _buildHeader() {
-    return Column(
+    return Stack(
+      alignment: Alignment.topCenter,
       children: [
-        Text('KidTechBalance',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontFamily: 'InstrumentSerif',
-              fontSize: _s(38, 58),
-              fontWeight: FontWeight.w400,
-              color: _textDark,
-              height: 1.1,
-              letterSpacing: -0.5,
-            )),
-        SizedBox(height: _s(4, 8)),
-        Text('Welcome ${widget.displayName},',
-            textAlign: TextAlign.center,
-            style: TextStyle(
-              fontFamily: 'InstrumentSerif',
-              fontSize: _s(22, 34),
-              fontStyle: FontStyle.italic,
-              color: _textMid,
-              height: 1.2,
-            )),
+        Column(
+          children: [
+            Text('KidTechBalance',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: 'InstrumentSerif',
+                  fontSize: _s(38, 58),
+                  fontWeight: FontWeight.w400,
+                  color: _textDark,
+                  height: 1.1,
+                  letterSpacing: -0.5,
+                )),
+            SizedBox(height: _s(4, 8)),
+            Text('Welcome ${widget.displayName},',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontFamily: 'InstrumentSerif',
+                  fontSize: _s(22, 34),
+                  fontStyle: FontStyle.italic,
+                  color: _textMid,
+                  height: 1.2,
+                )),
+          ],
+        ),
+        Positioned(
+          top: 0,
+          right: 0,
+          child: PopupMenuButton<String>(
+            icon: Icon(Icons.menu_rounded, color: _textMid, size: _s(24, 34)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            color: Colors.white,
+            elevation: 4,
+            onSelected: (value) {
+              if (value == 'calendar') _showCalendarDialog();
+            },
+            itemBuilder: (ctx) => [
+              PopupMenuItem<String>(
+                value: 'calendar',
+                child: Row(
+                  children: [
+                    Icon(Icons.calendar_month_outlined, color: _textMid, size: _s(20, 28)),
+                    SizedBox(width: _s(10, 14)),
+                    Text('Calendar', style: TextStyle(
+                      fontFamily: 'PlusJakartaSans',
+                      fontStyle: FontStyle.italic,
+                      fontSize: _s(14, 20),
+                      color: _textDark,
+                    )),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ],
     );
   }
@@ -1247,33 +1358,175 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   }
 
-  // ── calendar tile ─────────────────────────────────────────────────────────
+  // ── weekly overview chart ─────────────────────────────────────────────────
 
-  Widget _buildCalendarTile() {
-    return GestureDetector(
-      onTap: _showCalendarDialog,
-      child: Container(
-        width: double.infinity,
-        padding: EdgeInsets.symmetric(horizontal: _s(16, 24), vertical: _s(18, 26)),
-        decoration: _cardDecoration(elevation: 2),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.calendar_month_outlined, color: _textMid, size: _s(22, 32)),
-            SizedBox(width: _s(10, 16)),
-            Text(
-              _formatDate(_selectedDate),
-              style: TextStyle(
+  void _onDayBarTapped(DateTime day) async {
+    final prevMonday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
+    final newMonday  = day.subtract(Duration(days: day.weekday - 1));
+    final weekChanged = prevMonday != newMonday;
+    setState(() => _selectedDate = day);
+    if (weekChanged) {
+      if (widget.role == 'child') await _loadWeekMoods(day);
+      await _loadWeekData();
+    }
+    await _loadUsageStats(day);
+    if (widget.role == 'parent') await _loadChildUsageFromFirestore(day);
+  }
+
+  Widget _buildWeeklyOverviewChart() {
+    final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
+    final today  = _todayDate();
+    final endDay = monday.add(const Duration(days: 6));
+    const dayLetters = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+    final weekLabel = monday.month == endDay.month
+        ? '${months[monday.month - 1]} ${monday.day}–${endDay.day}'
+        : '${months[monday.month - 1]} ${monday.day} – ${months[endDay.month - 1]} ${endDay.day}';
+
+    final values = List.generate(7, (i) {
+      final key = _dateKey(monday.add(Duration(days: i)));
+      return _weekScreenTimeMinutes[key] ?? 0;
+    });
+    final maxVal = values.reduce((a, b) => a > b ? a : b);
+    final moods  = widget.role == 'child' ? _moodEntries : _parentChartMoods;
+
+    final chartH  = _s(72.0, 112.0);
+    final labelH  = _s(16.0, 22.0);
+    final letterH = _s(18.0, 26.0);
+    final moodH   = _s(20.0, 28.0);
+
+    final nextMonday = monday.add(const Duration(days: 7));
+    final canGoNext  = nextMonday.isBefore(today) || nextMonday == today;
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(_s(16, 24), _s(12, 18), _s(16, 24), _s(12, 18)),
+      decoration: _cardDecoration(elevation: 1.5),
+      child: Column(
+        children: [
+          // Week navigation header
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              GestureDetector(
+                onTap: () => _onDayBarTapped(
+                    _selectedDate.subtract(const Duration(days: 7))),
+                child: Icon(Icons.chevron_left, color: _textMid, size: _s(22, 32)),
+              ),
+              Text(weekLabel, style: TextStyle(
                 fontFamily: 'PlusJakartaSans',
                 fontStyle: FontStyle.italic,
-                fontSize: _s(15, 22),
+                fontSize: _s(13, 20),
+                fontWeight: FontWeight.w600,
                 color: _textDark,
+              )),
+              GestureDetector(
+                onTap: canGoNext
+                    ? () {
+                        final next = _selectedDate.add(const Duration(days: 7));
+                        _onDayBarTapped(next.isAfter(today) ? today : next);
+                      }
+                    : null,
+                child: Icon(Icons.chevron_right,
+                    color: canGoNext
+                        ? _textMid
+                        : _textLight.withValues(alpha: 0.25),
+                    size: _s(22, 32)),
               ),
+            ],
+          ),
+          SizedBox(height: _s(8, 12)),
+          // Bar columns
+          SizedBox(
+            height: labelH + chartH + letterH + moodH,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: List.generate(7, (i) {
+                final day      = monday.add(Duration(days: i));
+                final key      = _dateKey(day);
+                final mins     = values[i];
+                final isSelDay = day == _selectedDate;
+                final isToday  = day == today;
+                final isFuture = day.isAfter(today);
+                final ratio    = (!isFuture && maxVal > 0)
+                    ? (mins / maxVal).clamp(0.04, 1.0)
+                    : 0.04;
+                final barH     = isFuture ? 2.0 : chartH * ratio;
+                final moodEmoji = moods[key];
+
+                final barColor = isFuture
+                    ? _textLight.withValues(alpha: 0.15)
+                    : isSelDay
+                        ? const Color(0xFF7C6FCD)
+                        : isToday
+                            ? _barColor
+                            : _barColor.withValues(alpha: 0.55);
+
+                return Expanded(
+                  child: GestureDetector(
+                    onTap: isFuture ? null : () => _onDayBarTapped(day),
+                    behavior: HitTestBehavior.opaque,
+                    child: Column(
+                      children: [
+                        // Screen time label — only shown on selected day
+                        SizedBox(
+                          height: labelH,
+                          child: mins > 0 && isSelDay
+                              ? Center(child: Text(
+                                  UsageStatsService.formatMinutes(mins),
+                                  style: TextStyle(
+                                    fontFamily: 'PlusJakartaSans',
+                                    fontStyle: FontStyle.italic,
+                                    fontSize: _s(8, 12),
+                                    color: _textMid,
+                                  )))
+                              : null,
+                        ),
+                        // Bar grows from bottom
+                        Expanded(
+                          child: Align(
+                            alignment: Alignment.bottomCenter,
+                            child: Container(
+                              height: barH,
+                              margin: EdgeInsets.symmetric(horizontal: _s(3, 5)),
+                              decoration: BoxDecoration(
+                                color: barColor,
+                                borderRadius: BorderRadius.vertical(
+                                    top: Radius.circular(_s(4, 7))),
+                              ),
+                            ),
+                          ),
+                        ),
+                        // Day letter
+                        SizedBox(
+                          height: letterH,
+                          child: Center(child: Text(dayLetters[i], style: TextStyle(
+                            fontFamily: 'PlusJakartaSans',
+                            fontSize: _s(11, 16),
+                            fontWeight: isToday ? FontWeight.w700 : FontWeight.w500,
+                            color: isToday
+                                ? _textDark
+                                : isFuture
+                                    ? _textLight.withValues(alpha: 0.3)
+                                    : _textMid,
+                          ))),
+                        ),
+                        // Mood emoji
+                        SizedBox(
+                          height: moodH,
+                          child: moodEmoji != null
+                              ? Center(child: Text(moodEmoji,
+                                  style: TextStyle(fontSize: _s(13, 20))))
+                              : null,
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              }),
             ),
-            SizedBox(width: _s(8, 12)),
-            Icon(Icons.expand_more, color: _textLight, size: _s(18, 26)),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }

@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz_data;
@@ -17,14 +18,13 @@ class NotificationService {
   static Future<void> init() async {
     tz_data.initializeTimeZones();
 
+    // flutter_local_notifications crashes on iOS 26.x (SIGSEGV in native layer).
+    // Firebase Messaging handles all iOS push delivery natively, so skip here.
+    if (Platform.isIOS) return;
+
     await _plugin.initialize(
       const InitializationSettings(
         android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-        iOS: DarwinInitializationSettings(
-          requestSoundPermission: false,
-          requestBadgePermission: false,
-          requestAlertPermission: false,
-        ),
       ),
     );
 
@@ -44,6 +44,7 @@ class NotificationService {
 
   // Show a banner immediately (used for FCM foreground messages)
   static Future<void> showNudgeBanner(String title, String body) async {
+    if (Platform.isIOS) return;
     await _plugin.show(
       _fcmBannerBase + (title.hashCode.abs() % 50),
       title,
@@ -71,6 +72,7 @@ class NotificationService {
     required String body,
     required Duration delay,
   }) async {
+    if (Platform.isIOS) return;
     if (delay.isNegative || delay == Duration.zero) return;
 
     final scheduled = tz.TZDateTime.now(tz.UTC).add(delay);
@@ -100,6 +102,7 @@ class NotificationService {
 
   // Immediate notification when screen time limit is reached
   static Future<void> showLimitReached({required bool isParent}) async {
+    if (Platform.isIOS) return;
     final title = isParent ? "Child's screen time is up" : 'Screen time limit reached';
     final body  = isParent
         ? 'Your child has used their full screen time for today.'

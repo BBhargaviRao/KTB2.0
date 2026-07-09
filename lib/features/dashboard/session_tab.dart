@@ -607,6 +607,15 @@ class _SessionCreatorDialog extends StatefulWidget {
   State<_SessionCreatorDialog> createState() => _SessionCreatorDialogState();
 }
 
+// Splits into separate lines when both hours and minutes are present
+// (e.g. 75 -> ['1h', '15m']) so the label stacks vertically instead of
+// widening the cell — keeps every tick mark the same compact footprint.
+List<String> _fmtDurationLines(int m) {
+  if (m < 60) return ['${m}m'];
+  final h = m ~/ 60, r = m % 60;
+  return r == 0 ? ['${h}h'] : ['${h}h', '${r}m'];
+}
+
 class _SessionCreatorDialogState extends State<_SessionCreatorDialog> {
   int _duration = 30;
   final List<_STask> _tasks = [];
@@ -661,26 +670,45 @@ class _SessionCreatorDialogState extends State<_SessionCreatorDialog> {
           const Text('Duration',
               style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
                   fontSize: 14, color: _textDark)),
-          const SizedBox(height: 10),
-          Wrap(spacing: 8, runSpacing: 8,
-            children: [15, 30, 45, 60, 90, 120].map((m) {
-              final on = _duration == m;
-              return GestureDetector(
-                onTap: () => setState(() => _duration = m),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 130),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                  decoration: BoxDecoration(
-                    color: on ? _purple : _purpleLight, borderRadius: BorderRadius.circular(12)),
-                  child: Text(
-                    m < 60 ? '${m}m' : (m % 60 == 0 ? '${m ~/ 60}h' : '${m ~/ 60}h ${m % 60}m'),
-                    style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
-                        color: on ? Colors.white : _purple)),
-                ),
-              );
-            }).toList(),
+          SliderTheme(
+            data: SliderThemeData(
+              activeTrackColor: _purple,
+              inactiveTrackColor: _purpleLight,
+              thumbColor: _purple,
+              overlayColor: _purple.withValues(alpha: 0.15),
+            ),
+            child: Slider(
+              value: _duration.toDouble(),
+              min: 15,
+              max: 120,
+              divisions: 7,
+              onChanged: (v) => setState(() => _duration = v.round()),
+            ),
           ),
-          const SizedBox(height: 26),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4),
+            child: Row(
+              children: [15, 30, 45, 60, 75, 90, 105, 120].map((m) {
+                final on = _duration == m;
+                final style = TextStyle(fontFamily: 'PlusJakartaSans',
+                    fontSize: 9.5, height: 1.1,
+                    fontWeight: on ? FontWeight.w700 : FontWeight.w400,
+                    color: on ? _purple : _textMid);
+                return Expanded(
+                  child: SizedBox(
+                    height: 26,
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: _fmtDurationLines(m)
+                          .map((l) => Text(l, textAlign: TextAlign.center, style: style))
+                          .toList(),
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 14),
 
           // Tasks header
           Row(children: [
@@ -693,13 +721,7 @@ class _SessionCreatorDialogState extends State<_SessionCreatorDialog> {
           ]),
           const SizedBox(height: 10),
 
-          if (_tasks.isEmpty)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 12),
-              child: Text('No tasks yet — add one below',
-                  style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 13, color: _textMid)),
-            )
-          else
+          if (_tasks.isNotEmpty)
             ..._tasks.asMap().entries.map((e) {
               final i = e.key; final t = e.value;
               return Container(
@@ -786,10 +808,10 @@ class _SessionCreatorDialogState extends State<_SessionCreatorDialog> {
                 child: _saving
                     ? const SizedBox(width: 18, height: 18,
                         child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                    : const Text("Next — Select Apps on Child's Device",
+                    : const Text('Next: Select Apps',
                         textAlign: TextAlign.center,
                         style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
-                            fontSize: 13)),
+                            fontSize: 14)),
               ),
             ),
           ]),

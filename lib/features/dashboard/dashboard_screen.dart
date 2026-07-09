@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -34,12 +33,6 @@ String _ordinalSuffix(int day) {
   return switch (day % 10) { 1 => 'st', 2 => 'nd', 3 => 'rd', _ => 'th' };
 }
 
-String _formatDate(DateTime d) {
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const wdays  = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  return '${wdays[d.weekday - 1]}, ${d.day}${_ordinalSuffix(d.day)} ${months[d.month - 1]}';
-}
-
 // ══════════════════════════════════════════════════════════════════════════════
 // DashboardScreen
 // ══════════════════════════════════════════════════════════════════════════════
@@ -65,7 +58,6 @@ class DashboardScreen extends StatefulWidget {
 class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
   int _selectedTab = 0;
   DateTime _selectedDate = _todayDate();
-  bool _todoExpanded = false;
 
   // Child's mood entries for the displayed week (child only)
   final Map<String, String> _moodEntries = {};
@@ -611,15 +603,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // Loads mood entries for the week (child only — reads own account)
   Future<void> _loadWeekMoods(DateTime anyDayInWeek) async {
     if (widget.role != 'child') return;
-    final monday = anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday - 1));
-    final sunday = monday.add(const Duration(days: 6));
+    final sunday   = anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday % 7));
+    final saturday = sunday.add(const Duration(days: 6));
     try {
       final snap = await FirebaseFirestore.instance
           .collection('families').doc(widget.familyId)
           .collection('accounts').doc(widget.accountId)
           .collection('dailyData')
-          .where(FieldPath.documentId, isGreaterThanOrEqualTo: _dateKey(monday))
-          .where(FieldPath.documentId, isLessThanOrEqualTo: _dateKey(sunday))
+          .where(FieldPath.documentId, isGreaterThanOrEqualTo: _dateKey(sunday))
+          .where(FieldPath.documentId, isLessThanOrEqualTo: _dateKey(saturday))
           .get();
       if (!mounted) return;
       setState(() {
@@ -639,13 +631,13 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   Future<void> _loadWeekScreenTime() async {
-    final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
+    final sunday = _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
     final today = _todayDate();
     final childAccountId = widget.role == 'child' ? widget.accountId : _childAccountId;
     final iosVid = widget.role == 'child' ? _iosVendorId : _childIosVendorId;
 
     final futures = List.generate(7, (i) async {
-      final day = monday.add(Duration(days: i));
+      final day = sunday.add(Duration(days: i));
       if (day.isAfter(today)) return MapEntry(_dateKey(day), 0);
       final key = _dateKey(day);
 
@@ -679,15 +671,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   Future<void> _loadParentChartMoods(DateTime anyDayInWeek) async {
     if (widget.role != 'parent' || _childAccountId == null) return;
-    final monday = anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday - 1));
-    final sunday = monday.add(const Duration(days: 6));
+    final sunday   = anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday % 7));
+    final saturday = sunday.add(const Duration(days: 6));
     try {
       final snap = await FirebaseFirestore.instance
           .collection('families').doc(widget.familyId)
           .collection('accounts').doc(_childAccountId!)
           .collection('dailyData')
-          .where(FieldPath.documentId, isGreaterThanOrEqualTo: _dateKey(monday))
-          .where(FieldPath.documentId, isLessThanOrEqualTo: _dateKey(sunday))
+          .where(FieldPath.documentId, isGreaterThanOrEqualTo: _dateKey(sunday))
+          .where(FieldPath.documentId, isLessThanOrEqualTo: _dateKey(saturday))
           .get();
       if (!mounted) return;
       final moods = <String, String>{};
@@ -723,8 +715,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   void _onTabTapped(int index) => setState(() => _selectedTab = index);
 
-  BoxDecoration _cardDecoration({double elevation = 1}) => BoxDecoration(
-        color: Colors.white,
+  BoxDecoration _cardDecoration({double elevation = 1, Color color = Colors.white}) => BoxDecoration(
+        color: color,
         borderRadius: BorderRadius.circular(_s(18, 24)),
         boxShadow: [
           BoxShadow(
@@ -745,10 +737,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         selectedDate: _selectedDate,
         onDateSelected: (d) async {
           Navigator.of(context).pop();
-          final prevMonday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
-          final newMonday  = d.subtract(Duration(days: d.weekday - 1));
+          final prevSunday = _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
+          final newSunday  = d.subtract(Duration(days: d.weekday % 7));
           setState(() => _selectedDate = d);
-          if (newMonday != prevMonday) {
+          if (newSunday != prevSunday) {
             if (widget.role == 'child') await _loadWeekMoods(d);
             await _loadWeekData();
           }
@@ -791,7 +783,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       builder: (_) => _TodoDialog(
         initialTasks: initial,
         onSave: (updated) {
-          setState(() => _todoExpanded = false);
           for (final t in updated) {
             if (t.addedBy.isEmpty) t.addedBy = widget.role;
           }
@@ -819,20 +810,38 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   }
 
-  void _showMoodDialog() {
+  // Directly shows the emoji options — no intermediate dialog — so a single
+  // tap on the +/emoji in the weekly chart is all it takes to log today's mood.
+  void _showMoodPicker() {
     if (widget.role != 'child') return; // parent views child mood — no editing
+    final todayKey = _dateKey(_todayDate());
+    const emojis = ['😁', '🙂', '😐', '😟', '😢'];
     showDialog(
       context: context,
-      barrierColor: Colors.black.withValues(alpha: 0.45),
-      builder: (_) => _MoodDialog(
-        moodEntries: Map.of(_moodEntries),
-        selectedDate: _selectedDate,
-        onSave: (updated) {
-          setState(() => _moodEntries..clear()..addAll(updated));
-          final todayKey = _dateKey(_todayDate());
-          final emoji = updated[todayKey];
-          if (emoji != null) _persistMood(todayKey, emoji);
-        },
+      barrierColor: Colors.black.withValues(alpha: 0.35),
+      builder: (_) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
+          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: emojis.map((e) => GestureDetector(
+              onTap: () {
+                setState(() => _moodEntries[todayKey] = e);
+                _persistMood(todayKey, e);
+                Navigator.of(context).pop();
+              },
+              child: Container(
+                width: 44,
+                height: 44,
+                decoration: const BoxDecoration(color: Color(0xFFF5F3FB), shape: BoxShape.circle),
+                child: Center(child: Text(e, style: const TextStyle(fontSize: 24))),
+              ),
+            )).toList(),
+          ),
+        ),
       ),
     );
   }
@@ -915,56 +924,67 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 SizedBox(height: vGap),
                 // Keep screen time streams active for session tracking (hidden)
                 Offstage(offstage: true, child: _buildScreenTimeBar()),
-                // 3 · Adaptive layout: phone vs tablet
-                if (_isTablet) ...[
-                  // Tablet: To-do + Mood stacked left | Nudge right
-                  // SizedBox gives a bounded height so _DashboardNudgeWidget
-                  // (which uses Expanded internally) can render correctly.
-                  SizedBox(
-                    height: 440,
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              _buildToDoCard(),
-                              SizedBox(height: vGap),
-                              _buildMoodCard(),
-                            ],
-                          ),
-                        ),
-                        SizedBox(width: _s(12, 20)),
-                        Expanded(
-                          child: _DashboardNudgeWidget(
-                            familyId: widget.familyId,
-                            accountId: widget.accountId,
-                            role: widget.role,
-                            selectedDate: _selectedDate,
-                            onViewAll: () => setState(() => _selectedTab = 1),
-                          ),
-                        ),
-                      ],
-                    ),
+                // 2-4 · To-do/Notifications/Nudge/Time-spent, clustered in a
+                // single box with a pointer aimed at the selected day's bar.
+                _buildSelectedDayCluster(vGap),
+                const SizedBox(height: 8),
+              ]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // Wraps To-do/Notifications/Nudge/Time-spent in one box with a small
+  // triangle pointer aimed at the selected day's bar in the week overview
+  // widget above — makes it visually obvious these widgets reflect that day.
+  // Same green as the "Allowed" app-tag background in the session tab
+  // (session_tab.dart's _AppChips bg: const Color(0xFFE8F5E9)).
+  static const _clusterGreen = Color(0xFFE8F5E9);
+
+  Widget _buildSelectedDayCluster(double vGap) {
+    final cardPad  = _s(16.0, 24.0); // matches _buildWeeklyOverviewChart's horizontal padding
+    final dayIndex = _selectedDate.weekday % 7; // Sun=0 .. Sat=6
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width    = constraints.maxWidth;
+        final colWidth = (width - 2 * cardPad) / 7;
+        final centerX  = cardPad + (dayIndex + 0.5) * colWidth;
+        const triW = 18.0, triH = 9.0;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            SizedBox(
+              height: triH,
+              width: width,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    left: (centerX - triW / 2).clamp(0.0, width - triW),
+                    child: CustomPaint(
+                        size: const Size(triW, triH),
+                        painter: const _TrianglePainter(color: _clusterGreen)),
                   ),
-                ] else ...[
-                  // Phone: To-do | Mood side by side
-                  IntrinsicHeight(
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Expanded(child: _buildToDoCard()),
-                        SizedBox(width: _s(10, 16)),
-                        Expanded(child: _buildMoodCard()),
-                      ],
-                    ),
+                ],
+              ),
+            ),
+            Container(
+              width: width,
+              padding: EdgeInsets.all(_s(14, 20)),
+              decoration: _cardDecoration(elevation: 1.5, color: _clusterGreen),
+              child: Column(
+                children: [
+                  _buildTwoColumnRow(
+                    left: _buildToDoCard(),
+                    right: _buildNotificationsCard(),
                   ),
                   SizedBox(height: vGap),
-                  // Nudge full width — needs a finite height (Expanded inside requires bounded parent)
                   SizedBox(
-                    height: 300,
+                    height: _s(300, 440),
                     child: _DashboardNudgeWidget(
                       familyId: widget.familyId,
                       accountId: widget.accountId,
@@ -973,22 +993,14 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                       onViewAll: () => setState(() => _selectedTab = 1),
                     ),
                   ),
+                  SizedBox(height: vGap),
+                  _buildTimeSpentChart(),
                 ],
-                SizedBox(height: vGap),
-                // 4 · Bar graph full width
-                _buildTimeSpentChart(),
-                SizedBox(height: vGap),
-                // 5 · Most used (left) | Notifications (right)
-                _buildTwoColumnRow(
-                  left: _buildMostUsedCard(),
-                  right: _buildNotificationsCard(),
-                ),
-                const SizedBox(height: 8),
-              ]),
+              ),
             ),
-          ),
-        ],
-      ),
+          ],
+        );
+      },
     );
   }
 
@@ -1030,65 +1042,16 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // ── header ────────────────────────────────────────────────────────────────
 
   Widget _buildHeader() {
-    return Stack(
-      alignment: Alignment.topCenter,
-      children: [
-        Column(
-          children: [
-            Text('KidTechBalance',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontFamily: 'InstrumentSerif',
-                  fontSize: _s(38, 58),
-                  fontWeight: FontWeight.w400,
-                  color: _textDark,
-                  height: 1.1,
-                  letterSpacing: -0.5,
-                )),
-            SizedBox(height: _s(4, 8)),
-            Text('Welcome ${widget.displayName},',
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontFamily: 'InstrumentSerif',
-                  fontSize: _s(22, 34),
-                  fontStyle: FontStyle.italic,
-                  color: _textMid,
-                  height: 1.2,
-                )),
-          ],
-        ),
-        Positioned(
-          top: 0,
-          right: 0,
-          child: PopupMenuButton<String>(
-            icon: Icon(Icons.menu_rounded, color: _textMid, size: _s(24, 34)),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            color: Colors.white,
-            elevation: 4,
-            onSelected: (value) {
-              if (value == 'calendar') _showCalendarDialog();
-            },
-            itemBuilder: (ctx) => [
-              PopupMenuItem<String>(
-                value: 'calendar',
-                child: Row(
-                  children: [
-                    Icon(Icons.calendar_month_outlined, color: _textMid, size: _s(20, 28)),
-                    SizedBox(width: _s(10, 14)),
-                    Text('Calendar', style: TextStyle(
-                      fontFamily: 'PlusJakartaSans',
-                      fontStyle: FontStyle.italic,
-                      fontSize: _s(14, 20),
-                      color: _textDark,
-                    )),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
+    return Text('${widget.displayName}, welcome to KidTechBalance',
+        textAlign: TextAlign.center,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        style: TextStyle(
+          fontFamily: 'InstrumentSerif',
+          fontSize: _s(18, 28),
+          fontStyle: FontStyle.italic,
+          color: _textMid,
+        ));
   }
 
   // ── screen time bar ───────────────────────────────────────────────────────
@@ -1361,9 +1324,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // ── weekly overview chart ─────────────────────────────────────────────────
 
   void _onDayBarTapped(DateTime day) async {
-    final prevMonday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
-    final newMonday  = day.subtract(Duration(days: day.weekday - 1));
-    final weekChanged = prevMonday != newMonday;
+    final prevSunday = _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
+    final newSunday  = day.subtract(Duration(days: day.weekday % 7));
+    final weekChanged = prevSunday != newSunday;
     setState(() => _selectedDate = day);
     if (weekChanged) {
       if (widget.role == 'child') await _loadWeekMoods(day);
@@ -1374,18 +1337,18 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   Widget _buildWeeklyOverviewChart() {
-    final monday = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
+    final sunday = _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
     final today  = _todayDate();
-    final endDay = monday.add(const Duration(days: 6));
-    const dayLetters = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    final endDay = sunday.add(const Duration(days: 6));
+    const dayLetters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-    final weekLabel = monday.month == endDay.month
-        ? '${months[monday.month - 1]} ${monday.day}–${endDay.day}'
-        : '${months[monday.month - 1]} ${monday.day} – ${months[endDay.month - 1]} ${endDay.day}';
+    final weekLabel = sunday.month == endDay.month
+        ? '${months[sunday.month - 1]} ${sunday.day}–${endDay.day}'
+        : '${months[sunday.month - 1]} ${sunday.day} – ${months[endDay.month - 1]} ${endDay.day}';
 
     final values = List.generate(7, (i) {
-      final key = _dateKey(monday.add(Duration(days: i)));
+      final key = _dateKey(sunday.add(Duration(days: i)));
       return _weekScreenTimeMinutes[key] ?? 0;
     });
     final maxVal = values.reduce((a, b) => a > b ? a : b);
@@ -1396,8 +1359,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     final letterH = _s(18.0, 26.0);
     final moodH   = _s(20.0, 28.0);
 
-    final nextMonday = monday.add(const Duration(days: 7));
-    final canGoNext  = nextMonday.isBefore(today) || nextMonday == today;
+    final nextSunday = sunday.add(const Duration(days: 7));
+    final canGoNext  = nextSunday.isBefore(today) || nextSunday == today;
 
     return Container(
       padding: EdgeInsets.fromLTRB(_s(16, 24), _s(12, 18), _s(16, 24), _s(12, 18)),
@@ -1413,13 +1376,23 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                     _selectedDate.subtract(const Duration(days: 7))),
                 child: Icon(Icons.chevron_left, color: _textMid, size: _s(22, 32)),
               ),
-              Text(weekLabel, style: TextStyle(
-                fontFamily: 'PlusJakartaSans',
-                fontStyle: FontStyle.italic,
-                fontSize: _s(13, 20),
-                fontWeight: FontWeight.w600,
-                color: _textDark,
-              )),
+              GestureDetector(
+                onTap: _showCalendarDialog,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(weekLabel, style: TextStyle(
+                      fontFamily: 'PlusJakartaSans',
+                      fontStyle: FontStyle.italic,
+                      fontSize: _s(13, 20),
+                      fontWeight: FontWeight.w600,
+                      color: _textDark,
+                    )),
+                    SizedBox(width: _s(2, 4)),
+                    Icon(Icons.keyboard_arrow_down_rounded, color: _textMid, size: _s(16, 22)),
+                  ],
+                ),
+              ),
               GestureDetector(
                 onTap: canGoNext
                     ? () {
@@ -1442,7 +1415,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: List.generate(7, (i) {
-                final day      = monday.add(Duration(days: i));
+                final day      = sunday.add(Duration(days: i));
                 final key      = _dateKey(day);
                 final mins     = values[i];
                 final isSelDay = day == _selectedDate;
@@ -1511,13 +1484,37 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                                     : _textMid,
                           ))),
                         ),
-                        // Mood emoji
+                        // Mood emoji — every day gets a circle indicator: green
+                        // when that day is selected, empty/outlined otherwise.
+                        // Today's slot is tappable for the child to add/change
+                        // mood (shows a + until logged); every other day (and
+                        // the parent's view of the child's mood) is display-only.
                         SizedBox(
                           height: moodH,
-                          child: moodEmoji != null
-                              ? Center(child: Text(moodEmoji,
-                                  style: TextStyle(fontSize: _s(13, 20))))
-                              : null,
+                          child: Center(
+                            child: GestureDetector(
+                              onTap: (isToday && widget.role == 'child') ? _showMoodPicker : null,
+                              behavior: HitTestBehavior.opaque,
+                              child: Container(
+                                width: moodH,
+                                height: moodH,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  border: Border.all(
+                                    color: isSelDay ? _green : _textLight.withValues(alpha: 0.3),
+                                    width: 1.5,
+                                  ),
+                                ),
+                                child: Center(
+                                  child: moodEmoji != null
+                                      ? Text(moodEmoji, style: TextStyle(fontSize: _s(11, 17)))
+                                      : (isToday && widget.role == 'child')
+                                          ? Icon(Icons.add, size: _s(12, 18), color: _textLight)
+                                          : null,
+                                ),
+                              ),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -1606,10 +1603,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   Widget _buildToDoCardContent(List<_Task> todos) {
-    final sorted  = [...todos.where((t) => !t.done), ...todos.where((t) => t.done)];
-    final hasMore = sorted.length > 3;
-    final count   = _todoExpanded ? sorted.length : math.min(3, sorted.length);
-    final visible = sorted.sublist(0, count);
+    final sorted = [...todos.where((t) => !t.done), ...todos.where((t) => t.done)];
 
     return GestureDetector(
       onTap: _showTodoDialog,
@@ -1619,32 +1613,26 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text('To-do', style: TextStyle(
-                  fontFamily: 'PlusJakartaSans',
-                  fontStyle: FontStyle.italic,
-                  fontSize: _s(18, 28),
-                  fontWeight: FontWeight.w700,
-                  color: _textDark,
-                )),
-                if (hasMore)
-                  GestureDetector(
-                    onTap: () => setState(() => _todoExpanded = !_todoExpanded),
-                    child: Icon(
-                      _todoExpanded ? Icons.expand_less : Icons.add,
-                      size: _s(20, 28),
-                      color: _textMid,
-                    ),
-                  ),
-              ],
-            ),
-            SizedBox(height: _s(12, 20)),
-            ...visible.map((t) => Padding(
-              padding: EdgeInsets.only(bottom: _s(8, 14)),
-              child: _todoWidgetRow(t),
+            Text('To-do', style: TextStyle(
+              fontFamily: 'PlusJakartaSans',
+              fontStyle: FontStyle.italic,
+              fontSize: _s(18, 28),
+              fontWeight: FontWeight.w700,
+              color: _textDark,
             )),
+            SizedBox(height: _s(12, 20)),
+            SizedBox(
+              height: _s(110.0, 180.0),
+              child: sorted.isEmpty
+                  ? Center(child: Text('No tasks yet', style: TextStyle(
+                      fontFamily: 'PlusJakartaSans', fontSize: _s(12, 18), color: _textLight)))
+                  : ListView.separated(
+                      padding: EdgeInsets.zero,
+                      itemCount: sorted.length,
+                      separatorBuilder: (_, __) => SizedBox(height: _s(8, 14)),
+                      itemBuilder: (_, i) => _todoWidgetRow(sorted[i]),
+                    ),
+            ),
           ],
         ),
       ),
@@ -1677,166 +1665,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           )),
         ),
       ],
-    );
-  }
-
-  // ── mood card ─────────────────────────────────────────────────────────────
-
-  Widget _buildMoodCard() {
-    if (widget.role == 'parent') return _buildParentMoodCard();
-    return _buildChildMoodCard();
-  }
-
-  // Parent sees child's mood in real-time via StreamBuilder
-  Widget _buildParentMoodCard() {
-    if (_childAccountId == null) {
-      return Container(
-        padding: EdgeInsets.all(_s(14, 24)),
-        decoration: _cardDecoration(),
-        child: const Center(child: CircularProgressIndicator(strokeWidth: 2)),
-      );
-    }
-    final today   = _todayDate();
-    final monday  = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
-    final sunday  = monday.add(const Duration(days: 6));
-    final curMonday = today.subtract(Duration(days: today.weekday - 1));
-    final isCurrentWeek = monday == curMonday;
-
-    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      key: ValueKey('parent_mood_${_childAccountId}_${_dateKey(monday)}'),
-      stream: FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('accounts').doc(_childAccountId)
-          .collection('dailyData')
-          .where(FieldPath.documentId, isGreaterThanOrEqualTo: _dateKey(monday))
-          .where(FieldPath.documentId, isLessThanOrEqualTo: _dateKey(sunday))
-          .snapshots(),
-      builder: (ctx, snap) {
-        final Map<String, String> moods = {};
-        if (snap.hasData) {
-          for (final doc in snap.data!.docs) {
-            final m = doc.data()['mood'] as String?;
-            if (m != null) moods[doc.id] = m;
-          }
-        }
-        return _buildMoodCardUI(
-          title: isCurrentWeek ? "Child's mood, this week" : "Child's mood, ${_formatDate(monday)}",
-          moods: moods,
-          onTap: null, // parent is read-only
-        );
-      },
-    );
-  }
-
-  // Child sees and edits their own mood
-  Widget _buildChildMoodCard() {
-    final today   = _todayDate();
-    final monday  = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
-    final curMonday = today.subtract(Duration(days: today.weekday - 1));
-    final isCurrentWeek = monday == curMonday;
-
-    return _buildMoodCardUI(
-      title: isCurrentWeek ? 'Mood, this week' : 'Mood, ${_formatDate(monday)}',
-      moods: _moodEntries,
-      onTap: _showMoodDialog,
-    );
-  }
-
-  Widget _buildMoodCardUI({
-    required String title,
-    required Map<String, String> moods,
-    required VoidCallback? onTap,
-  }) {
-    final today   = _todayDate();
-    final monday  = _selectedDate.subtract(Duration(days: _selectedDate.weekday - 1));
-    final selKey  = _dateKey(_selectedDate);
-
-    // 2-row grid: row 1 = Mon–Thu, row 2 = Fri–Sun
-    // Each circle shows day letter inside; emoji replaces the letter when set
-    const dayLetters = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-    final circleSize = _isTablet ? 38.0 : 30.0;
-    final fontSize   = _isTablet ? 13.0 : 10.0;
-    final emojiSize  = _isTablet ? 20.0 : 16.0;
-
-    Widget dayCircle(int i) {
-      final day      = monday.add(Duration(days: i));
-      final key      = _dateKey(day);
-      final isToday  = day == today;
-      final isFuture = day.isAfter(today);
-      final emoji    = moods[key];
-      final hasRing  = key == selKey && emoji != null;
-
-      Color bg        = Colors.transparent;
-      Color border    = _textLight.withValues(alpha: isFuture ? 0.2 : 0.4);
-      double borderW  = 1.2;
-
-      if (isToday && onTap != null && emoji == null) {
-        bg     = _green;
-        border = _green;
-        borderW = 0;
-      }
-      if (hasRing) borderW = 2.2;
-
-      return Expanded(
-        child: Center(
-          child: Container(
-            width: circleSize,
-            height: circleSize,
-            decoration: BoxDecoration(
-              color: bg,
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: hasRing ? _green : border,
-                width: borderW,
-              ),
-            ),
-            child: Center(
-              child: emoji != null
-                  ? Text(emoji, style: TextStyle(fontSize: emojiSize))
-                  : isToday && onTap != null
-                      ? Icon(Icons.add, color: Colors.white, size: circleSize * 0.45)
-                      : Text(
-                          dayLetters[i],
-                          style: TextStyle(
-                            fontFamily: 'PlusJakartaSans',
-                            fontSize: fontSize,
-                            fontWeight: FontWeight.w600,
-                            color: isFuture ? _textLight.withValues(alpha: 0.3) : _textLight,
-                          ),
-                        ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: EdgeInsets.all(_s(10, 20)),
-        decoration: _cardDecoration(),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(title, style: TextStyle(
-              fontFamily: 'PlusJakartaSans',
-              fontStyle: FontStyle.italic,
-              fontSize: _s(12, 22),
-              fontWeight: FontWeight.w700,
-              color: _textDark,
-            )),
-            SizedBox(height: _s(8, 14)),
-            // Row 1: Mon–Thu
-            Row(children: List.generate(4, dayCircle)),
-            SizedBox(height: _s(6, 10)),
-            // Row 2: Fri–Sun (3 circles + 1 spacer to keep alignment)
-            Row(children: [
-              ...List.generate(3, (i) => dayCircle(4 + i)),
-              const Expanded(child: SizedBox()),
-            ]),
-          ],
-        ),
-      ),
     );
   }
 
@@ -2215,73 +2043,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           ),
         ],
       ),
-    );
-  }
-
-  // ── most used card ────────────────────────────────────────────────────────
-
-  Widget _buildMostUsedCard() {
-    Widget cardTitle = Text('Most used', style: TextStyle(
-      fontFamily: 'PlusJakartaSans',
-      fontStyle: FontStyle.italic,
-      fontSize: _s(17, 28),
-      fontWeight: FontWeight.w700,
-      color: _textDark,
-    ));
-
-    final isParent = widget.role == 'parent';
-    final showingFirestoreData = isParent && _showChildUsage;
-    final nativeOk = Platform.isAndroid || Platform.isIOS;
-    final hasData = _activeEntries.isNotEmpty &&
-        (showingFirestoreData || (nativeOk && _usagePermissionGranted));
-
-    List<Widget> rows;
-    if (Platform.isIOS && _usagePermissionGranted && widget.role == 'child' && _activeEntries.isEmpty) {
-      // Child's iOS data loads from Firestore after extension uploads (~25s delay)
-      rows = [Text('Category data loading… check back shortly.',
-          style: TextStyle(fontFamily: 'PlusJakartaSans',
-              fontStyle: FontStyle.italic, fontSize: _s(12, 19), color: _textLight))];
-    } else if (!hasData) {
-      final msg = !nativeOk && !showingFirestoreData
-          ? 'Not available on this device.'
-          : !_usagePermissionGranted && !showingFirestoreData
-              ? 'Grant usage access to see categories.'
-              : 'No usage data for this day.';
-      rows = [Text(msg, style: TextStyle(fontFamily: 'PlusJakartaSans',
-          fontStyle: FontStyle.italic, fontSize: _s(12, 19), color: _textLight))];
-    } else {
-      final categories = UsageStatsService.groupByCategory(_activeEntries).take(5).toList();
-      rows = categories.asMap().entries.map((e) {
-        final rank = e.key + 1;
-        final cat  = e.value;
-        return Padding(
-          padding: EdgeInsets.only(bottom: _s(8, 14)),
-          child: _mostUsedRow('$rank. ${cat.key}', UsageStatsService.formatMinutes(cat.value)),
-        );
-      }).toList();
-    }
-
-    return Container(
-      padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
-      decoration: _cardDecoration(),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          cardTitle,
-          SizedBox(height: _s(10, 18)),
-          ...rows,
-        ],
-      ),
-    );
-  }
-
-  Widget _mostUsedRow(String name, String time) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-      children: [
-        Text(name, style: TextStyle(fontFamily: 'PlusJakartaSans', fontStyle: FontStyle.italic, fontSize: _s(14, 22), color: _textDark)),
-        Text(time, style: TextStyle(fontFamily: 'PlusJakartaSans', fontStyle: FontStyle.italic, fontSize: _s(14, 22), color: _textMid)),
-      ],
     );
   }
 
@@ -2765,7 +2526,7 @@ class _TodoDialogState extends State<_TodoDialog> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('To-do, today', style: TextStyle(
+                    const Text('To-do', style: TextStyle(
                       fontFamily: 'PlusJakartaSans',
                       fontSize: 22,
                       fontWeight: FontWeight.w700,
@@ -2890,213 +2651,6 @@ class _TodoDialogState extends State<_TodoDialog> {
             ),
           ),
         ],
-      ),
-    );
-  }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Mood dialog
-// ══════════════════════════════════════════════════════════════════════════════
-
-class _MoodDialog extends StatefulWidget {
-  final Map<String, String> moodEntries;
-  final DateTime selectedDate;
-  final ValueChanged<Map<String, String>> onSave;
-
-  const _MoodDialog({
-    required this.moodEntries,
-    required this.selectedDate,
-    required this.onSave,
-  });
-
-  @override
-  State<_MoodDialog> createState() => _MoodDialogState();
-}
-
-class _MoodDialogState extends State<_MoodDialog> {
-  late Map<String, String> _entries;
-  bool _showingPicker = false;
-
-  static const _textDark  = Color(0xFF1A1A2E);
-  static const _textMid   = Color(0xFF4A4A6A);
-  static const _textLight = Color(0xFF8A8AAA);
-  static const _green     = Color(0xFF4A7C59);
-  static const _emojis    = ['😁', '🙂', '😐', '😟', '😢'];
-
-  @override
-  void initState() {
-    super.initState();
-    _entries = Map.of(widget.moodEntries);
-  }
-
-  void _selectEmoji(String emoji) {
-    final key = _dateKey(_todayDate());
-    _entries[key] = emoji;
-    widget.onSave(_entries);
-    setState(() => _showingPicker = false);
-    Future.delayed(const Duration(milliseconds: 150), () {
-      if (mounted) Navigator.of(context).pop();
-    });
-  }
-
-  String _todayName() {
-    const names = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-    return names[_todayDate().weekday - 1];
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final today   = _todayDate();
-    final monday  = today.subtract(Duration(days: today.weekday - 1));
-    final selKey  = _dateKey(widget.selectedDate);
-    const labels  = ['M', 'T', 'W', 'Th', 'F', 'S', 'Su'];
-    final todayKey = _dateKey(today);
-
-    return Dialog(
-      backgroundColor: Colors.transparent,
-      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 80),
-      child: Center(
-        child: ConstrainedBox(
-          constraints: const BoxConstraints(maxWidth: 400),
-          child: Container(
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Emoji picker bubble
-                if (_showingPicker) ...[
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF5F3FB),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: _emojis.map((e) => GestureDetector(
-                        onTap: () => _selectEmoji(e),
-                        child: Container(
-                          width: 44,
-                          height: 44,
-                          decoration: const BoxDecoration(color: Colors.white, shape: BoxShape.circle),
-                          child: Center(child: Text(e, style: const TextStyle(fontSize: 24))),
-                        ),
-                      )).toList(),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                ],
-                // Header
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    const Text('Mood, this week', style: TextStyle(
-                      fontFamily: 'PlusJakartaSans',
-                      fontSize: 20,
-                      fontWeight: FontWeight.w700,
-                      color: _textDark,
-                    )),
-                    GestureDetector(
-                      onTap: () => Navigator.of(context).pop(),
-                      child: const Icon(Icons.close, color: _textLight, size: 24),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                // Day labels
-                Row(
-                  children: labels.map((l) => Expanded(
-                    child: Text(l,
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontFamily: 'PlusJakartaSans',
-                          fontSize: 13,
-                          color: _textLight,
-                        )),
-                  )).toList(),
-                ),
-                const SizedBox(height: 8),
-                // Emoji row
-                Row(
-                  children: List.generate(7, (i) {
-                    final day      = monday.add(Duration(days: i));
-                    final key      = _dateKey(day);
-                    final isToday  = day == today;
-                    final isFuture = day.isAfter(today);
-                    final emoji    = _entries[key];
-                    final isSel    = key == selKey && emoji != null;
-                    const size     = 40.0;
-
-                    if (isToday) {
-                      // Today: always tappable to set or change mood
-                      final hasEmoji = _entries[todayKey] != null;
-                      return Expanded(child: Center(child: GestureDetector(
-                        onTap: () => setState(() => _showingPicker = !_showingPicker),
-                        child: hasEmoji
-                            ? Container(
-                                width: size + 4,
-                                height: size + 4,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  border: Border.all(color: _green, width: 2.5),
-                                ),
-                                child: Center(child: Text(_entries[todayKey]!,
-                                    style: const TextStyle(fontSize: 22))),
-                              )
-                            : Container(
-                                width: size,
-                                height: size,
-                                decoration: const BoxDecoration(color: _green, shape: BoxShape.circle),
-                                child: const Icon(Icons.add, color: Colors.white, size: 20),
-                              ),
-                      )));
-                    }
-
-                    if (emoji != null) {
-                      return Expanded(child: Center(child: Container(
-                        width: size + 4,
-                        height: size + 4,
-                        decoration: isSel
-                            ? BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.all(color: _green, width: 2.5),
-                              )
-                            : null,
-                        child: Center(child: Text(emoji, style: const TextStyle(fontSize: 22))),
-                      )));
-                    }
-
-                    return Expanded(child: Center(child: Container(
-                      width: size,
-                      height: size,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                          color: _textLight.withValues(alpha: isFuture ? 0.2 : 0.4),
-                          width: 1.2,
-                        ),
-                      ),
-                    )));
-                  }),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  _showingPicker
-                      ? 'Tap an emoji to log today\'s mood'
-                      : '${_todayName()} is today — tap + to log how you\'re feeling',
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    fontFamily: 'PlusJakartaSans',
-                    fontSize: 14,
-                    color: _textMid,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
     );
   }
@@ -3818,6 +3372,27 @@ class _ScreenTimeLimitDialogState extends State<_ScreenTimeLimitDialog> {
 
 extension _SortedList on List<int> {
   List<int> sorted() => List.of(this)..sort();
+}
+
+// Small upward-pointing triangle used as the "speech bubble" pointer on the
+// selected-day widget cluster, aimed at the selected bar in the week chart.
+class _TrianglePainter extends CustomPainter {
+  final Color color;
+  const _TrianglePainter({this.color = Colors.white});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()..color = color;
+    final path = Path()
+      ..moveTo(0, size.height)
+      ..lineTo(size.width / 2, 0)
+      ..lineTo(size.width, size.height)
+      ..close();
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

@@ -62,6 +62,39 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     });
   }
 
+  DocumentReference<Map<String, dynamic>> _nudgeSettingsRef() =>
+      FirebaseFirestore.instance
+          .collection('families').doc(widget.familyId)
+          .collection('settings').doc('nudges');
+
+  Future<void> _showNudgeWindowDialog(BuildContext context) async {
+    final doc = await _nudgeSettingsRef().get();
+    final data = doc.data();
+    final w1 = data?['childWindow1'] as Map<String, dynamic>?;
+    final w2 = data?['childWindow2'] as Map<String, dynamic>?;
+
+    if (!context.mounted) return;
+    showDialog(
+      context: context,
+      barrierColor: Colors.black.withOpacity(0.45),
+      builder: (_) => _NudgeWindowDialog(
+        initialWindow1Start: w1?['startHour'] as int? ?? 15,
+        initialWindow1End: w1?['endHour'] as int? ?? 17,
+        initialWindow2Start: w2?['startHour'] as int? ?? 18,
+        initialWindow2End: w2?['endHour'] as int? ?? 20,
+        onSave: (w1Start, w1End, w2Start, w2End) async {
+          await _nudgeSettingsRef().set({
+            'childWindow1': {'startHour': w1Start, 'endHour': w1End},
+            'childWindow2': {'startHour': w2Start, 'endHour': w2End},
+            'updatedAt': FieldValue.serverTimestamp(),
+            'updatedByRole': 'parent',
+            'updatedByAccountId': widget.parentAccountId,
+          }, SetOptions(merge: true));
+        },
+      ),
+    );
+  }
+
   bool _showChildNudges = false;
 
   bool _showUnanswered = true;
@@ -505,7 +538,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontFamily: 'InstrumentSerif',
-                      fontSize: MediaQuery.of(context).size.shortestSide >= 600 ? 64 : 48,
+                      fontSize: MediaQuery.of(context).size.shortestSide >= 600 ? 40 : 30,
                       fontWeight: FontWeight.w400,
                       color: Colors.black,
                       height: 1.0,
@@ -514,23 +547,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                   ),
                 ),
               ),
-              const SliverToBoxAdapter(child: SizedBox(height: 18)),
-              SliverToBoxAdapter(
-                child: Center(
-                  child: Text(
-                    'Welcome ${widget.parentName},',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontFamily: 'InstrumentSerif',
-                      fontSize: 32,
-                      fontStyle: FontStyle.italic,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black,
-                    ),
-                  ),
-                ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 12)),
+              const SliverToBoxAdapter(child: SizedBox(height: 10)),
               SliverToBoxAdapter(
                 child: Center(
                   child: Container(
@@ -582,6 +599,35 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                 ),
               ),
               const SliverToBoxAdapter(child: SizedBox(height: 12)),
+              if (_showChildNudges)
+                SliverPadding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  sliver: SliverToBoxAdapter(
+                    child: SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                      onPressed: () => _showNudgeWindowDialog(context),
+                      child: const Text(
+                        'Set Delivery for Child',
+                        style: TextStyle(
+                          fontFamily: 'PlusJakartaSans',
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF7C6FCD),
+                        elevation: 3,
+                        shadowColor: Colors.black.withOpacity(0.35),
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              const SliverToBoxAdapter(child: SizedBox(height: 4)),
               SliverToBoxAdapter(child: _parentFiltersPill()),
               const SliverToBoxAdapter(child: SizedBox(height: 18)),
               SliverPadding(
@@ -1219,6 +1265,265 @@ class _ReadOnlyAnswerCard extends StatelessWidget {
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Nudge delivery window dialog ──────────────────────────────────────────
+// Lets the parent pick a 2-hour delivery window for each of the child's two
+// daily nudges. Persisted to families/{familyId}/settings/nudges and read by
+// the generateDailyNudges Cloud Function (childWindow1/childWindow2), so it
+// stays in effect until the parent changes it again.
+class _NudgeWindowDialog extends StatefulWidget {
+  final int initialWindow1Start;
+  final int initialWindow1End;
+  final int initialWindow2Start;
+  final int initialWindow2End;
+  final Future<void> Function(int w1Start, int w1End, int w2Start, int w2End) onSave;
+
+  const _NudgeWindowDialog({
+    required this.initialWindow1Start,
+    required this.initialWindow1End,
+    required this.initialWindow2Start,
+    required this.initialWindow2End,
+    required this.onSave,
+  });
+
+  @override
+  State<_NudgeWindowDialog> createState() => _NudgeWindowDialogState();
+}
+
+class _NudgeWindowDialogState extends State<_NudgeWindowDialog> {
+  static const _purple = Color(0xFF7C6FCD);
+  static const _purpleLight = Color(0xFFEDE9FF);
+
+  late FixedExtentScrollController _hourCtrl1;
+  late FixedExtentScrollController _periodCtrl1;
+  late FixedExtentScrollController _hourCtrl2;
+  late FixedExtentScrollController _periodCtrl2;
+
+  late int _hour12_1; // 1-12
+  late String _period1; // 'AM' | 'PM'
+  late int _hour12_2;
+  late String _period2;
+
+  bool _saving = false;
+
+  static const List<String> _hours = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
+  static const List<String> _periods = ['AM', 'PM'];
+
+  @override
+  void initState() {
+    super.initState();
+    _hour12_1 = _hour12From24(widget.initialWindow1Start);
+    _period1 = widget.initialWindow1Start < 12 ? 'AM' : 'PM';
+    _hour12_2 = _hour12From24(widget.initialWindow2Start);
+    _period2 = widget.initialWindow2Start < 12 ? 'AM' : 'PM';
+
+    _hourCtrl1 = FixedExtentScrollController(initialItem: _hour12_1 - 1);
+    _periodCtrl1 = FixedExtentScrollController(initialItem: _period1 == 'AM' ? 0 : 1);
+    _hourCtrl2 = FixedExtentScrollController(initialItem: _hour12_2 - 1);
+    _periodCtrl2 = FixedExtentScrollController(initialItem: _period2 == 'AM' ? 0 : 1);
+  }
+
+  @override
+  void dispose() {
+    _hourCtrl1.dispose();
+    _periodCtrl1.dispose();
+    _hourCtrl2.dispose();
+    _periodCtrl2.dispose();
+    super.dispose();
+  }
+
+  static int _hour12From24(int start24) {
+    final h = start24 % 12;
+    return h == 0 ? 12 : h;
+  }
+
+  static int _start24From12(int hour12, String period) {
+    final h = hour12 % 12;
+    return period == 'AM' ? h : h + 12;
+  }
+
+  static String _fmtHour(int hour12, String period) => '$hour12:00 $period';
+
+  String _fmtRange(int hour12, String period) {
+    final start = _start24From12(hour12, period);
+    final endMod = (start + 2) % 24;
+    final endHour12 = _hour12From24(endMod);
+    final endPeriod = endMod < 12 ? 'AM' : 'PM';
+    return '${_fmtHour(hour12, period)} – ${_fmtHour(endHour12, endPeriod)}';
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    final w1Start = _start24From12(_hour12_1, _period1);
+    final w2Start = _start24From12(_hour12_2, _period2);
+    final w1End = (w1Start + 2).clamp(0, 24);
+    final w2End = (w2Start + 2).clamp(0, 24);
+    try {
+      await widget.onSave(w1Start, w1End, w2Start, w2End);
+      if (mounted) Navigator.of(context).pop();
+    } catch (e) {
+      if (mounted) {
+        setState(() => _saving = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), behavior: SnackBarBehavior.floating));
+      }
+    }
+  }
+
+  Widget _buildWheel<T>({
+    required FixedExtentScrollController controller,
+    required List<T> items,
+    required ValueChanged<T> onChanged,
+  }) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Container(
+          height: 36,
+          margin: const EdgeInsets.symmetric(horizontal: 6),
+          decoration: BoxDecoration(
+            color: _purpleLight,
+            borderRadius: BorderRadius.circular(10),
+          ),
+        ),
+        ListWheelScrollView(
+          controller: controller,
+          itemExtent: 36,
+          perspective: 0.003,
+          diameterRatio: 1.3,
+          physics: const FixedExtentScrollPhysics(),
+          onSelectedItemChanged: (i) => onChanged(items[i]),
+          children: items.map((item) => Center(
+            child: Text('$item', style: const TextStyle(
+              fontFamily: 'PlusJakartaSans',
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: _purple,
+            )),
+          )).toList(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWindowPicker({
+    required String title,
+    required int hour12,
+    required String period,
+    required FixedExtentScrollController hourCtrl,
+    required FixedExtentScrollController periodCtrl,
+    required ValueChanged<int> onHourChanged,
+    required ValueChanged<String> onPeriodChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: const TextStyle(
+          fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w700, fontSize: 15, color: _purple)),
+        const SizedBox(height: 4),
+        Text(_fmtRange(hour12, period), style: TextStyle(
+          fontFamily: 'PlusJakartaSans', fontSize: 12, color: Colors.black54)),
+        const SizedBox(height: 8),
+        SizedBox(
+          height: 130,
+          child: Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: _buildWheel<String>(
+                  controller: hourCtrl,
+                  items: _hours,
+                  onChanged: (v) => onHourChanged(int.parse(v)),
+                ),
+              ),
+              Expanded(
+                flex: 2,
+                child: _buildWheel<String>(
+                  controller: periodCtrl,
+                  items: _periods,
+                  onChanged: onPeriodChanged,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(child: Text('Nudge Delivery Windows',
+                    style: TextStyle(fontFamily: 'InstrumentSerif', fontSize: 24, color: _purple))),
+                IconButton(
+                  icon: const Icon(Icons.close, color: _purple),
+                  onPressed: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              "Choose a 2-hour window for each of your child's daily nudges. "
+              'This stays in effect until you change it again.',
+              style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12, color: Colors.black54),
+            ),
+            const SizedBox(height: 20),
+            _buildWindowPicker(
+              title: 'First nudge window',
+              hour12: _hour12_1,
+              period: _period1,
+              hourCtrl: _hourCtrl1,
+              periodCtrl: _periodCtrl1,
+              onHourChanged: (v) => setState(() => _hour12_1 = v),
+              onPeriodChanged: (v) => setState(() => _period1 = v),
+            ),
+            const SizedBox(height: 20),
+            _buildWindowPicker(
+              title: 'Second nudge window',
+              hour12: _hour12_2,
+              period: _period2,
+              hourCtrl: _hourCtrl2,
+              periodCtrl: _periodCtrl2,
+              onHourChanged: (v) => setState(() => _hour12_2 = v),
+              onPeriodChanged: (v) => setState(() => _period2 = v),
+            ),
+            const SizedBox(height: 24),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _saving ? null : _save,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _purple,
+                  foregroundColor: Colors.white,
+                  elevation: 0,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                child: _saving
+                    ? const SizedBox(width: 18, height: 18,
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                    : const Text('Save', style: TextStyle(
+                        fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600)),
+              ),
+            ),
+          ],
         ),
       ),
     );

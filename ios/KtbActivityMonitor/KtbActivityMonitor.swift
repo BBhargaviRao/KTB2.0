@@ -76,11 +76,6 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
 
         guard let url = URL(string: urlStr) else { return }
 
-        var req = URLRequest(url: url)
-        req.httpMethod = "PATCH"
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.timeoutInterval = 10
-
         let iso = ISO8601DateFormatter().string(from: Date())
         let body: [String: Any] = [
             "fields": [
@@ -88,9 +83,35 @@ class DeviceActivityMonitorExtension: DeviceActivityMonitor {
                 "screenTimeLastUpdatedAt": ["timestampValue": iso],
             ]
         ]
-        req.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return }
 
-        URLSession.shared.dataTask(with: req).resume()
+        // Even blocking synchronously on URLSession.shared wasn't enough — the
+        // whole extension PROCESS gets torn down by the OS almost immediately
+        // after eventDidReachThreshold fires (confirmed: the local App Group
+        // write below always lands correctly, but this REST call never did,
+        // while KTB was force-quit). A background URLSession hands the
+        // transfer to the OS's own upload daemon (nsurlsessiond), which owns
+        // it independently of this process and keeps retrying until it
+        // succeeds — the Apple-sanctioned mechanism for network work that
+        // must outlive a short-lived extension. Background uploads require
+        // the body as a file on disk, not in-memory Data.
+        guard let tmpURL = try? {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("ktb_st_\(dateKey)_\(minutes)_\(UUID().uuidString)")
+            try bodyData.write(to: url)
+            return url
+        }() else { return }
+
+        var req = URLRequest(url: url)
+        req.httpMethod = "PATCH"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let identifier = "com.ktb.kidstechbalance2.screentime.\(dateKey).\(minutes)"
+        let config = URLSessionConfiguration.background(withIdentifier: identifier)
+        config.sessionSendsLaunchEvents = false
+        config.isDiscretionary = false
+        let session = URLSession(configuration: config, delegate: nil, delegateQueue: nil)
+        session.uploadTask(with: req, fromFile: tmpURL).resume()
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────

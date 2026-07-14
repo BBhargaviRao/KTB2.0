@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:ktb2/services/usage_stats_service.dart';
+import 'package:ktb2/services/notification_service.dart';
 
 // ── palette ────────────────────────────────────────────────────────────────────
 const _bg          = Color(0xFFF5F3FF);
@@ -74,6 +75,14 @@ class _SessionTabState extends State<SessionTab> {
   // Tracks which session we've applied iOS ManagedSettings restrictions for.
   // Prevents re-applying on every build while session is active.
   String? _appliedRestrictionsForSession;
+
+  // Guards the "no active session" clear-restrictions call so it only fires
+  // once per idle period. Unlike _appliedRestrictionsForSession, this must
+  // NOT rely on having witnessed the active→ended transition: if the child's
+  // app was closed when the session ended, this widget is recreated fresh on
+  // next launch with _appliedRestrictionsForSession == null, so the old
+  // transition check never fired and the shield was left stuck forever.
+  bool _didClearOnEntry = false;
 
   // Tracks which session the Android blocking service is running for.
   String? _blockingServiceSessionId;
@@ -177,13 +186,14 @@ class _SessionTabState extends State<SessionTab> {
     final existing = (snap.data()?['todos'] as List<dynamic>? ?? [])
         .where((t) => (t as Map)['sessionId'] != sessionId)
         .toList();
-    final sTodos = tasks.map((t) {
-      final m = t as Map<String, dynamic>;
+    final sTodos = tasks.asMap().entries.map((entry) {
+      final m = entry.value as Map<String, dynamic>;
       return {
         'text':      '${m['text']} (${m['durationMinutes']}m)',
         'done':      false,
         'addedBy':   'parent',
         'sessionId': sessionId,
+        'taskIndex': entry.key,
       };
     }).toList();
     await dailyRef.set({
@@ -260,6 +270,80 @@ class _SessionTabState extends State<SessionTab> {
     await _sessions.doc(sessionId).update({'status': 'completed'});
   }
 
+  CollectionReference<Map<String, dynamic>> get _savedSessions =>
+      _db.collection('families').doc(widget.familyId).collection('savedSessions');
+
+  // ── parent: save a session's apps+tasks as a named, repeatable template ───
+  Future<void> _saveAsTemplate(Map<String, dynamic> data) async {
+    final nameCtrl = TextEditingController();
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Save this session'),
+        content: TextField(
+          controller: nameCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: 'e.g. Homework time'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(nameCtrl.text.trim()),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty || !mounted) return;
+
+    final tasks = (data['tasks'] as List<dynamic>? ?? []).map((t) {
+      final m = t as Map<String, dynamic>;
+      return {'text': m['text'], 'durationMinutes': m['durationMinutes']};
+    }).toList();
+
+    await _savedSessions.add({
+      'name':               name,
+      'durationMinutes':    data['durationMinutes'],
+      'tasks':              tasks,
+      'allowedApps':        data['allowedApps'] ?? [],
+      'blockedApps':        data['blockedApps'] ?? [],
+      'iosNativeSelection': data['iosNativeSelection'] ?? false,
+      'createdAt':          FieldValue.serverTimestamp(),
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Saved "$name" for quick reuse')),
+      );
+    }
+  }
+
+  // ── parent: re-run a saved template — skips task entry + app picking ──────
+  // by writing status straight to apps_selected (same state a normal session
+  // reaches after the child confirms apps), reusing the saved apps/tasks.
+  Future<void> _runSavedSession(Map<String, dynamic> data) async {
+    final tasks = (data['tasks'] as List<dynamic>? ?? []).map((t) {
+      final m = t as Map<String, dynamic>;
+      return {'text': m['text'], 'durationMinutes': m['durationMinutes'], 'done': false};
+    }).toList();
+
+    await _sessions.doc().set({
+      'status':             'apps_selected',
+      'durationMinutes':    data['durationMinutes'],
+      'dateKey':            _todayKey(),
+      'createdBy':          widget.role,
+      'createdAt':          FieldValue.serverTimestamp(),
+      'tasks':              tasks,
+      'allowedApps':        data['allowedApps'] ?? [],
+      'blockedApps':        data['blockedApps'] ?? [],
+      'iosNativeSelection': data['iosNativeSelection'] ?? false,
+    });
+  }
+
+  Future<void> _deleteSavedSession(String id) async {
+    await _savedSessions.doc(id).delete();
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -321,7 +405,18 @@ class _SessionTabState extends State<SessionTab> {
                 .map((a) => (a as Map)['packageName'] as String? ?? '')
                 .where((s) => s.isNotEmpty)
                 .toList();
-            Future.microtask(() => UsageStatsService.startBlockingService(allowedPackages));
+            Future.microtask(() async {
+              final ok = await UsageStatsService.startBlockingService(
+                  allowedPackages, widget.familyId, newActiveId);
+              // A failed native call (permission dialog stealing focus, a
+              // timing hiccup right after login, etc.) used to permanently
+              // block tracking for the rest of the session with zero retry
+              // and zero visibility. Clearing the guard lets the next
+              // Firestore snapshot try again instead of silently giving up.
+              if (!ok && mounted && _blockingServiceSessionId == newActiveId) {
+                setState(() => _blockingServiceSessionId = null);
+              }
+            });
           } else if (newActiveId == null && overrideDoc == null &&
               _blockingServiceSessionId != null) {
             _blockingServiceSessionId = null;
@@ -335,12 +430,13 @@ class _SessionTabState extends State<SessionTab> {
           final newActiveId = activeDoc?.id;
           if (newActiveId != null && _appliedRestrictionsForSession != newActiveId) {
             _appliedRestrictionsForSession = newActiveId;
+            _didClearOnEntry = false;
             WidgetsBinding.instance.addPostFrameCallback((_) {
               UsageStatsService.applySessionRestrictions();
             });
-          } else if (newActiveId == null && overrideDoc == null &&
-              _appliedRestrictionsForSession != null) {
+          } else if (newActiveId == null && overrideDoc == null && !_didClearOnEntry) {
             _appliedRestrictionsForSession = null;
+            _didClearOnEntry = true;
             WidgetsBinding.instance.addPostFrameCallback((_) {
               UsageStatsService.clearSessionRestrictions();
             });
@@ -368,8 +464,12 @@ class _SessionTabState extends State<SessionTab> {
                 else if (activeDoc != null)
                   _ActiveCard(
                     doc: activeDoc, role: widget.role,
+                    familyId: widget.familyId,
                     onEnd: () => _endSession(activeDoc.id),
                     onRequestOverride: () => _requestOverride(activeDoc.id),
+                    onSaveTemplate: widget.role == 'parent'
+                        ? () => _saveAsTemplate(activeDoc.data())
+                        : null,
                   )
                 else if (widget.role == 'parent' && appsReadyDoc != null)
                   _AppsReadyCard(
@@ -425,6 +525,41 @@ class _SessionTabState extends State<SessionTab> {
                           style: TextStyle(fontFamily: 'PlusJakartaSans',
                               fontWeight: FontWeight.w600, fontSize: 15)),
                     ),
+                  ),
+
+                // ── saved sessions (parent) — always visible, independent of
+                // whether a session is currently active, so "where did my
+                // saved session go" isn't a question: it lives here permanently
+                // until explicitly deleted from this list (deleting only
+                // removes it from here, not from that day's session history).
+                if (widget.role == 'parent')
+                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                    stream: _savedSessions.orderBy('createdAt', descending: true).snapshots(),
+                    builder: (ctx, savedSnap) {
+                      final saved = savedSnap.data?.docs ?? [];
+                      if (saved.isEmpty) return const SizedBox.shrink();
+                      return Padding(
+                        padding: const EdgeInsets.only(top: 20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Saved Sessions',
+                                style: TextStyle(fontFamily: 'PlusJakartaSans',
+                                    fontWeight: FontWeight.w600, fontSize: 13,
+                                    color: _textMid, letterSpacing: 0.5)),
+                            const SizedBox(height: 12),
+                            ...saved.map((d) => _SavedSessionRow(
+                                  name: d.data()['name'] as String? ?? 'Session',
+                                  durationMinutes: d.data()['durationMinutes'] as int? ?? 0,
+                                  taskCount: (d.data()['tasks'] as List<dynamic>? ?? []).length,
+                                  enabled: currentDoc == null,
+                                  onRun: () => _runSavedSession(d.data()),
+                                  onDelete: () => _deleteSavedSession(d.id),
+                                )),
+                          ],
+                        ),
+                      );
+                    },
                   ),
 
                 // ── past sessions ─────────────────────────────────────────
@@ -1260,10 +1395,14 @@ class _ChildWaitingCard extends StatelessWidget {
 class _ActiveCard extends StatefulWidget {
   final QueryDocumentSnapshot<Map<String, dynamic>> doc;
   final String role;
+  final String familyId;
   final VoidCallback onEnd;
   final VoidCallback onRequestOverride;
+  final VoidCallback? onSaveTemplate;
   const _ActiveCard({required this.doc, required this.role,
-      required this.onEnd, required this.onRequestOverride});
+      required this.familyId,
+      required this.onEnd, required this.onRequestOverride,
+      this.onSaveTemplate});
 
   @override
   State<_ActiveCard> createState() => _ActiveCardState();
@@ -1273,6 +1412,9 @@ class _ActiveCardState extends State<_ActiveCard> {
   Timer? _timer;
   Duration _remaining = Duration.zero;
   bool _expanded = false;
+  // Guards against calling onEnd() more than once from this device when the
+  // countdown naturally reaches zero (as opposed to the parent ending early).
+  bool _autoEndTriggered = false;
 
   @override
   void initState() { super.initState(); _tick(); _timer = Timer.periodic(const Duration(seconds: 1), (_) => _tick()); }
@@ -1283,7 +1425,14 @@ class _ActiveCardState extends State<_ActiveCard> {
   void _tick() {
     final end = (widget.doc.data()['endTime'] as Timestamp).toDate();
     final rem = end.difference(DateTime.now());
-    if (mounted) setState(() => _remaining = rem.isNegative ? Duration.zero : rem);
+    final expired = rem.isNegative;
+    if (mounted) setState(() => _remaining = expired ? Duration.zero : rem);
+    // Time's up — automatically mark the session completed so it moves to
+    // the past-sessions list instead of staying "active" indefinitely.
+    if (expired && !_autoEndTriggered) {
+      _autoEndTriggered = true;
+      widget.onEnd();
+    }
   }
 
   @override
@@ -1334,6 +1483,15 @@ class _ActiveCardState extends State<_ActiveCard> {
               const Spacer(),
               Text('${TimeOfDay.fromDateTime(start).format(context)} – ${TimeOfDay.fromDateTime(end).format(context)}',
                   style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
+              if (widget.onSaveTemplate != null)
+                IconButton(
+                  onPressed: widget.onSaveTemplate,
+                  tooltip: 'Save as reusable session',
+                  visualDensity: VisualDensity.compact,
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                  icon: const Icon(Icons.star_border_rounded, color: _purple, size: 18),
+                ),
               const SizedBox(width: 6),
               Icon(_expanded ? Icons.expand_less : Icons.expand_more, color: _textMid, size: 18),
             ]),
@@ -1425,6 +1583,23 @@ class _ActiveCardState extends State<_ActiveCard> {
           ]),
         ),
 
+        // Reminders — moved here from the dashboard bar, which is now a pure
+        // progress display that just navigates to this tab. There's no more
+        // daily limit to set; each session's own duration is the limit.
+        SizedBox(width: double.infinity,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: _purple),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+            ),
+            onPressed: () => _showScreenTimeLimitDialog(
+                context, widget.familyId, widget.role),
+            child: const Text('Add Reminders', style: TextStyle(
+                fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600, color: _purple)),
+          )),
+        const SizedBox(height: 10),
+
         // Action buttons
         if (widget.role == 'parent')
           SizedBox(width: double.infinity,
@@ -1483,6 +1658,64 @@ class _EmptyCard extends StatelessWidget {
             : 'Your parent will start a session\nwhen it\'s time',
         textAlign: TextAlign.center,
         style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 13, color: _textMid)),
+    ]),
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Saved (repeatable) session row
+// ═══════════════════════════════════════════════════════════════════════════════
+class _SavedSessionRow extends StatelessWidget {
+  final String name;
+  final int durationMinutes;
+  final int taskCount;
+  final bool enabled;
+  final VoidCallback onRun;
+  final VoidCallback onDelete;
+  const _SavedSessionRow({
+    required this.name, required this.durationMinutes, required this.taskCount,
+    required this.onRun, required this.onDelete, this.enabled = true,
+  });
+
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(bottom: 10),
+    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+    decoration: BoxDecoration(
+      color: Colors.white, borderRadius: BorderRadius.circular(16),
+      border: Border.all(color: _border),
+    ),
+    child: Row(children: [
+      const Icon(Icons.star_rounded, color: _purple, size: 20),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(name, style: const TextStyle(fontFamily: 'PlusJakartaSans',
+              fontWeight: FontWeight.w600, fontSize: 14, color: _textDark)),
+          Text('$durationMinutes min · ${taskCount == 1 ? '1 task' : '$taskCount tasks'}',
+              style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
+        ]),
+      ),
+      IconButton(
+        onPressed: onDelete,
+        visualDensity: VisualDensity.compact,
+        icon: const Icon(Icons.delete_outline_rounded, color: _textMid, size: 20),
+      ),
+      TextButton(
+        onPressed: enabled
+            ? onRun
+            : () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('End the current session before starting a saved one'),
+                duration: Duration(seconds: 3),
+                behavior: SnackBarBehavior.floating,
+              )),
+        style: TextButton.styleFrom(
+          backgroundColor: enabled ? _purpleLight : const Color(0xFFF0F0F0),
+          foregroundColor: enabled ? _purple : _textMid,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        ),
+        child: const Text('Run', style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600)),
+      ),
     ]),
   );
 }
@@ -1614,4 +1847,284 @@ class _AppChips extends StatelessWidget {
         )).toList()),
     ]),
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Screen Time Limit dialog — with reminder scheduler
+// Moved here from the dashboard (which is now a pure progress display) so
+// setting the limit and reminders lives alongside the active session and its
+// app list.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+Future<void> _showScreenTimeLimitDialog(
+  BuildContext context,
+  String familyId,
+  String role,
+) async {
+  final settingsRef = FirebaseFirestore.instance
+      .collection('families').doc(familyId)
+      .collection('settings').doc('screenTime');
+  final now = DateTime.now();
+  final todayKey =
+      '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
+
+  final settingsDoc = await settingsRef.get();
+  final settingsData = settingsDoc.data();
+  // screenTimeLimitMinutes is auto-set to the active session's own duration
+  // when the session starts (see _writePendingSession/_startSession) — it's
+  // read-only here, never edited from this dialog.
+  final limitMinutes = settingsData?['screenTimeLimitMinutes'] as int? ?? 0;
+  final currentReminders = (settingsData?['reminderMinutes'] as List<dynamic>?)
+          ?.map((e) => e as int)
+          .toList() ??
+      <int>[];
+
+  final dayDoc = await FirebaseFirestore.instance
+      .collection('families').doc(familyId)
+      .collection('dashboard_days').doc(todayKey)
+      .get();
+  final usedMinutes = dayDoc.data()?['screenTimeUsedMinutes'] as int? ?? 0;
+
+  if (!context.mounted) return;
+
+  showDialog(
+    context: context,
+    builder: (_) => _ScreenTimeLimitDialog(
+      limitMinutes: limitMinutes,
+      initialReminders: currentReminders,
+      usedMinutes: usedMinutes,
+      onSave: (reminders) async {
+        await settingsRef.set(
+            {'reminderMinutes': reminders}, SetOptions(merge: true));
+        await _scheduleScreenTimeReminders(
+            familyId, role, todayKey, limitMinutes, usedMinutes, reminders);
+      },
+    ),
+  );
+}
+
+Future<void> _scheduleScreenTimeReminders(
+  String familyId,
+  String role,
+  String todayKey,
+  int limitMins,
+  int usedMinutes,
+  List<int> reminders,
+) async {
+  await NotificationService.cancelAllReminders();
+  for (int i = 0; i < reminders.length; i++) {
+    final minsLeft = reminders[i];
+    final minsUntilFire = limitMins - usedMinutes - minsLeft;
+    if (minsUntilFire > 0) {
+      await NotificationService.scheduleReminder(
+        slotIndex: i,
+        title: 'Screen time reminder',
+        body: '$minsLeft minutes of screen time left today.',
+        delay: Duration(minutes: minsUntilFire),
+      );
+      try {
+        final fireAt = DateTime.now().add(Duration(minutes: minsUntilFire));
+        await FirebaseFirestore.instance
+            .collection('families').doc(familyId)
+            .collection('notifications')
+            .add({
+          'title': 'Screen time reminder',
+          'body': '$minsLeft minutes of screen time left today.',
+          'type': 'screen_time_reminder',
+          'targetRole': role,
+          'dateKey': todayKey,
+          'sentAt': Timestamp.fromDate(fireAt),
+        });
+      } catch (_) {}
+    }
+  }
+}
+
+class _ScreenTimeLimitDialog extends StatefulWidget {
+  // Read-only — comes from the active session's own duration, not a
+  // separately-configured daily cap. There is no more "daily limit" to edit;
+  // each session sets its own time, so only reminders are configurable here.
+  final int limitMinutes;
+  final List<int> initialReminders;
+  final int usedMinutes;
+  final void Function(List<int> reminders) onSave;
+
+  const _ScreenTimeLimitDialog({
+    required this.limitMinutes,
+    required this.initialReminders,
+    required this.usedMinutes,
+    required this.onSave,
+  });
+
+  @override
+  State<_ScreenTimeLimitDialog> createState() => _ScreenTimeLimitDialogState();
+}
+
+class _ScreenTimeLimitDialogState extends State<_ScreenTimeLimitDialog> {
+  late List<int> _reminders;
+  double _pendingReminder = 10; // minutes before session end for new reminder
+
+  @override
+  void initState() {
+    super.initState();
+    _reminders = List.of(widget.initialReminders);
+  }
+
+  void _addReminder() {
+    final v = _pendingReminder.round();
+    if (!_reminders.contains(v) && _reminders.length < 5) {
+      setState(() => _reminders.add(v));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final minsLeft = (widget.limitMinutes - widget.usedMinutes).clamp(0, widget.limitMinutes);
+
+    return Dialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 420),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── header ────────────────────────────────────────────────────
+              const Text('Add Reminders',
+                style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: _textDark,
+                )),
+              const SizedBox(height: 4),
+              Text('$minsLeft min left in this session',
+                style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12,
+                    color: _textMid)),
+
+              const SizedBox(height: 22),
+              const Divider(color: _border),
+              const SizedBox(height: 14),
+
+              // ── reminders section ─────────────────────────────────────────
+              const Text('Remind me when time is running out',
+                style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 14,
+                    fontWeight: FontWeight.w600, color: _textMid)),
+              const SizedBox(height: 6),
+              const Text('Add multiple alerts. Each fires X minutes before the session ends.',
+                style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12,
+                    color: _textMid)),
+              const SizedBox(height: 12),
+
+              // Slider + Add button
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('${_pendingReminder.round()} min before limit',
+                          style: const TextStyle(fontFamily: 'PlusJakartaSans',
+                              fontSize: 13, fontWeight: FontWeight.w500)),
+                        SliderTheme(
+                          data: SliderTheme.of(context).copyWith(
+                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
+                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                            activeTrackColor: _purple,
+                            inactiveTrackColor: _purpleLight,
+                            thumbColor: _purple,
+                          ),
+                          child: Slider(
+                            value: _pendingReminder,
+                            min: 5,
+                            max: 60,
+                            divisions: 11,
+                            onChanged: (v) => setState(() => _pendingReminder = v),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  GestureDetector(
+                    onTap: _reminders.length >= 5 ? null : _addReminder,
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: _reminders.length >= 5 ? _border : _purple,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.add, color: Colors.white, size: 20),
+                    ),
+                  ),
+                ],
+              ),
+
+              // Reminder chips
+              if (_reminders.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: _reminders.sortedAsc().map((r) => Chip(
+                    label: Text('$r min',
+                      style: const TextStyle(fontFamily: 'PlusJakartaSans',
+                          fontSize: 13, fontWeight: FontWeight.w600)),
+                    backgroundColor: _purpleLight,
+                    side: BorderSide.none,
+                    deleteIcon: const Icon(Icons.close, size: 14),
+                    deleteIconColor: _textMid,
+                    onDeleted: () => setState(() => _reminders.remove(r)),
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    visualDensity: VisualDensity.compact,
+                  )).toList(),
+                ),
+              ],
+
+              const SizedBox(height: 22),
+
+              // ── action buttons ────────────────────────────────────────────
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context),
+                    child: const Text('Cancel',
+                      style: TextStyle(fontFamily: 'PlusJakartaSans', color: _textMid)),
+                  ),
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: () {
+                      widget.onSave(_reminders);
+                      Navigator.pop(context);
+                    },
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: _purple,
+                      foregroundColor: Colors.white,
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 24, vertical: 12),
+                    ),
+                    child: const Text('Save',
+                      style: TextStyle(fontFamily: 'PlusJakartaSans',
+                          fontWeight: FontWeight.w700)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+extension _SortedReminderList on List<int> {
+  List<int> sortedAsc() => List.of(this)..sort();
 }

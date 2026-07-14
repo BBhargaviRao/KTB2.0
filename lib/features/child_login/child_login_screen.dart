@@ -398,7 +398,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontFamily: 'InstrumentSerif',
-                      fontSize: MediaQuery.of(context).size.shortestSide >= 600 ? 64 : 46,
+                      fontSize: MediaQuery.of(context).size.shortestSide >= 600 ? 40 : 30,
                       fontWeight: FontWeight.w400,
                       color: Colors.black,
                       height: 1.0,
@@ -407,23 +407,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                   ),
                 ),
               ),
-              const SliverToBoxAdapter(child: SizedBox(height: 16)),
-              SliverToBoxAdapter(
-                child: Center(
-                  child: Text(
-                    'Welcome ${widget.childName},',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontFamily: 'InstrumentSerif',
-                      fontSize: 30,
-                      fontStyle: FontStyle.italic,
-                      fontWeight: FontWeight.w500,
-                      color: Colors.black,
-                    ),
-                  ),
-                ),
-              ),
-              const SliverToBoxAdapter(child: SizedBox(height: 14)),
+              const SliverToBoxAdapter(child: SizedBox(height: 10)),
               SliverToBoxAdapter(child: _childFiltersPill()),
               const SliverToBoxAdapter(child: SizedBox(height: 18)),
               SliverPadding(

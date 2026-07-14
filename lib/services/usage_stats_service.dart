@@ -249,8 +249,13 @@ class UsageStatsService {
 
   // Android only — starts AppBlockerService with the given allowed package names.
   // Everything not in [allowedPackages] (plus KTB itself) will be blocked.
-  static Future<void> startBlockingService(List<String> allowedPackages) async {
-    if (!Platform.isAndroid) return;
+  // familyId lets the service upload real usage minutes to Firestore itself
+  // (via REST, same technique as the iOS KtbActivityMonitor extension) so the
+  // parent's screen-time bar keeps updating even if the child closes the app —
+  // this runs in the native foreground service, independent of the Flutter engine.
+  static Future<bool> startBlockingService(
+      List<String> allowedPackages, String familyId, String sessionId) async {
+    if (!Platform.isAndroid) return false;
     try {
       final hasOverlay = await hasOverlayPermission();
       if (!hasOverlay) {
@@ -258,8 +263,14 @@ class UsageStatsService {
       }
       await _blockingChannel.invokeMethod('startBlockingService', {
         'allowedPackages': allowedPackages,
+        'familyId': familyId,
+        'sessionId': sessionId,
       });
-    } catch (_) {}
+      return true;
+    } catch (e) {
+      print('KTB: startBlockingService failed: $e');
+      return false;
+    }
   }
 
   // Android only — stops AppBlockerService and removes any active overlay.

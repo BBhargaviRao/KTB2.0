@@ -78,8 +78,11 @@ struct FamilyPickerScreen: View {
         }
         ToolbarItem(placement: .confirmationAction) {
           Button("Confirm") {
-            // Persist the selection in the App Group so the extension and
-            // applySessionRestrictions can read it without the main app open.
+            // Persist the selection in the App Group so the extension,
+            // applySessionRestrictions (shield), and startScreenTimeMonitoring
+            // (screen-time-limit progress bar) can all read it without the
+            // main app open. The same session app selection now drives both
+            // blocking and the limit progress bar — no separate picker.
             if let data = try? JSONEncoder().encode(vm.selection) {
               UserDefaults(suiteName: kGroupId)?.set(data, forKey: "ktb_app_selection")
             }
@@ -145,6 +148,28 @@ struct FamilyPickerScreen: View {
   private static func bestMinutes(dateKey: String) -> Int {
     let real = UserDefaults(suiteName: kGroupId)?.integer(forKey: kRealMins + dateKey) ?? 0
     return real > 0 ? real : foregroundMinutes(dateKey: dateKey)
+  }
+
+  // ── Shared FamilyActivityPicker presentation ──────────────────────────────
+  @available(iOS 16.0, *)
+  @MainActor
+  private func presentFamilyPicker(result: @escaping FlutterResult) {
+    let vm     = FamilyPickerVM()
+    let screen = FamilyPickerScreen(vm: vm)
+    let hostVC = UIHostingController(rootView: screen)
+    hostVC.modalPresentationStyle = .formSheet
+    hostVC.isModalInPresentation  = false
+    vm.onConfirm = {
+      hostVC.dismiss(animated: true)
+      result(true)
+    }
+    vm.onCancel = {
+      hostVC.dismiss(animated: true)
+      result(false)
+    }
+    var top: UIViewController? = self.window?.rootViewController
+    while let presented = top?.presentedViewController { top = presented }
+    top?.present(hostVC, animated: true)
   }
 
   // ── App lifecycle ─────────────────────────────────────────────────────────
@@ -218,11 +243,14 @@ struct FamilyPickerScreen: View {
             grp?.removeObject(forKey: kRealMins + dateKey)
             grp?.removeObject(forKey: "ktb_last_interval_clear")
 
-            // Read the FamilyActivitySelection so DeviceActivity monitors actual
-            // usage. Non-empty tokens are required on iOS 26+ for threshold events
-            // to fire — empty sets don't trigger the extension on iOS 26.
-            // ManagedSettings (not DeviceActivityMonitor) handles app blocking;
-            // DeviceActivityMonitor never auto-blocks apps when a threshold fires.
+            // Read the same session app selection used for ManagedSettings
+            // blocking (ktb_app_selection) — whatever apps were most recently
+            // chosen when a KTB Session was set up are automatically what
+            // counts toward the screen-time limit too, no separate picker.
+            // Non-empty tokens are required on iOS 26+ for threshold events
+            // to fire — empty sets don't trigger the extension. ManagedSettings
+            // (not DeviceActivityMonitor) handles app blocking; DeviceActivity
+            // Monitor never auto-blocks apps on threshold.
             var appTokens: Set<ApplicationToken>      = []
             var catTokens: Set<ActivityCategoryToken> = []
             if let selData = grp?.data(forKey: "ktb_app_selection"),
@@ -231,12 +259,27 @@ struct FamilyPickerScreen: View {
               catTokens = sel.categoryTokens
             }
 
-            // 5-minute thresholds up to limitMinutes + 30, capped at 360 min.
-            // Matches the original working interval that kept the extension firing
-            // without causing per-app blocking via DeviceActivity on iOS 16-25.
+            // No session has ever been set up on this device yet — nothing to
+            // monitor. Fail clearly instead of silently starting a no-op
+            // monitor with empty tokens (which iOS 26+ never fires anyway).
+            if appTokens.isEmpty && catTokens.isEmpty {
+              UserDefaults(suiteName: kGroupId)?.set(
+                "err:no ktb_app_selection yet", forKey: "ktb_monitor_status")
+              result(false)
+              return
+            }
+
+            // 1-minute thresholds up to limitMinutes + 30, capped at 360 min —
+            // gives the parent's dashboard near-live updates instead of waiting
+            // up to 5 minutes. DeviceActivityCenter only supports a limited
+            // number of events per monitored activity, so the step size widens
+            // automatically for longer sessions to stay under that cap while
+            // still using true 1-minute steps for shorter ones.
             var events: [DeviceActivityEvent.Name: DeviceActivityEvent] = [:]
             let maxMin = min(limitMinutes + 30, 360)
-            for min in stride(from: 5, through: maxMin, by: 5) {
+            let maxEvents = 20
+            let step = max(1, Int(ceil(Double(maxMin) / Double(maxEvents))))
+            for min in stride(from: step, through: maxMin, by: step) {
               let name = DeviceActivityEvent.Name("ktb_min_\(min)")
               events[name] = DeviceActivityEvent(
                 applications: appTokens,
@@ -328,23 +371,7 @@ struct FamilyPickerScreen: View {
           // applySessionRestrictions can read it without the app being open.
           case "showFamilyActivityPicker":
             Task { @MainActor in
-              let vm     = FamilyPickerVM()
-              let screen = FamilyPickerScreen(vm: vm)
-              let hostVC = UIHostingController(rootView: screen)
-              hostVC.modalPresentationStyle = .formSheet
-              hostVC.isModalInPresentation  = false
-              vm.onConfirm = {
-                hostVC.dismiss(animated: true)
-                result(true)
-              }
-              vm.onCancel = {
-                hostVC.dismiss(animated: true)
-                result(false)
-              }
-              // Present from the topmost view controller
-              var top: UIViewController? = self.window?.rootViewController
-              while let presented = top?.presentedViewController { top = presented }
-              top?.present(hostVC, animated: true)
+              self.presentFamilyPicker(result: result)
             }
 
           // ── Session: apply ManagedSettings restrictions ───────────────

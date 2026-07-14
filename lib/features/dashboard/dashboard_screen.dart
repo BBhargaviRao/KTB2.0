@@ -6,6 +6,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:ktb2/features/parent_login/parent_login_screen.dart';
 import 'package:ktb2/features/child_login/child_login_screen.dart';
 import 'package:ktb2/features/dashboard/session_tab.dart';
+import 'package:ktb2/features/home/home_screen.dart' show maybePromptToSaveLogin;
 import 'package:ktb2/services/notification_service.dart';
 import 'package:ktb2/services/usage_stats_service.dart';
 
@@ -15,7 +16,19 @@ class _Task {
   String text;
   bool done;
   String addedBy; // 'parent' | 'child'
-  _Task({required this.text, this.done = false, this.addedBy = ''});
+  // Non-null when this to-do originated from a session's task list — lets us
+  // sync a checkbox toggle here back to sessions/{sessionId}.tasks[taskIndex]
+  // so the session card (which reads tasks straight from the session doc)
+  // reflects the same done state instead of drifting out of sync.
+  String? sessionId;
+  int? taskIndex;
+  _Task({
+    required this.text,
+    this.done = false,
+    this.addedBy = '',
+    this.sessionId,
+    this.taskIndex,
+  });
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -42,6 +55,11 @@ class DashboardScreen extends StatefulWidget {
   final String role;
   final String familyId;
   final String accountId;
+  // Set only right after a fresh login — shown once this screen (with
+  // SessionTab already mounted) is reached, so the prompt can never block
+  // getting here regardless of how long it takes to resolve.
+  final String? pendingSaveLoginFamilyCode;
+  final String? pendingSaveLoginPin;
 
   const DashboardScreen({
     super.key,
@@ -49,6 +67,8 @@ class DashboardScreen extends StatefulWidget {
     required this.role,
     required this.familyId,
     required this.accountId,
+    this.pendingSaveLoginFamilyCode,
+    this.pendingSaveLoginPin,
   });
 
   @override
@@ -64,9 +84,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   // accountId of the child in this family (parent reads child mood via this)
   String? _childAccountId;
-
-  // Local screen time reminder preferences (device-specific)
-  List<int> _screenTimeReminders = [];
 
   // App usage data (Android — loaded on initState; iOS — read from Firestore after extension)
   List<AppUsageEntry> _usageEntries = [];
@@ -233,6 +250,52 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           .collection('families').doc(widget.familyId)
           .collection('settings').doc('screenTime');
 
+  // Runs once per day (whichever role opens the app first): if today's
+  // dailyData doc has no todos yet, carry forward yesterday's unfinished
+  // tasks (done stays false) instead of resetting to a fixed default list.
+  // Nudges the child if anything was carried over.
+  Future<void> _rolloverTodosIfNeeded() async {
+    final todayKey = _dateKey(_todayDate());
+    try {
+      final todayDoc = await _familyDailyRef(todayKey).get();
+      if (todayDoc.exists && todayDoc.data()?['todos'] != null) return;
+
+      final yesterdayKey = _dateKey(_todayDate().subtract(const Duration(days: 1)));
+      final yestDoc = await _familyDailyRef(yesterdayKey).get();
+      final raw = yestDoc.data()?['todos'] as List<dynamic>?;
+      final carried = (raw ?? [])
+          .map((t) => Map<String, dynamic>.from(t as Map))
+          .where((t) => t['done'] != true)
+          .map((t) => {
+                'text': t['text'],
+                'done': false,
+                'addedBy': t['addedBy'] ?? '',
+              })
+          .toList();
+
+      await _familyDailyRef(todayKey).set({
+        'todos': carried,
+        'todosUpdatedAt': FieldValue.serverTimestamp(),
+        'updatedByRole': 'system',
+        'dateKey': todayKey,
+      }, SetOptions(merge: true));
+
+      if (carried.isNotEmpty) {
+        await FirebaseFirestore.instance
+            .collection('families').doc(widget.familyId)
+            .collection('notifications')
+            .add({
+          'title': 'Unfinished tasks carried over',
+          'body': 'Finish the remaining tasks today!',
+          'type': 'todo_rollover',
+          'targetRole': 'child',
+          'dateKey': todayKey,
+          'sentAt': FieldValue.serverTimestamp(),
+        });
+      }
+    } catch (_) {}
+  }
+
   // Returns a cached todos stream — avoids resubscription on every widget rebuild
   Stream<DocumentSnapshot<Map<String, dynamic>>> _getTodosStream(String dateKey) {
     if (_todosStreamDateKey != dateKey || _todosStream == null) {
@@ -262,6 +325,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     WidgetsBinding.instance.addObserver(this);
     _settingsStream = _familySettingsRef().snapshots();
     Future.microtask(_loadInitialData);
+    final pendingCode = widget.pendingSaveLoginFamilyCode;
+    final pendingPin  = widget.pendingSaveLoginPin;
+    if (pendingCode != null && pendingPin != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          maybePromptToSaveLogin(context, familyCode: pendingCode, pin: pendingPin);
+        }
+      });
+    }
     _usageRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
       if (!mounted || _selectedDate != _todayDate()) return;
       if (Platform.isIOS && widget.role == 'child' && _iosVendorId != null) {
@@ -295,6 +367,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       _findChildAccountId(),
       if (widget.role == 'child') _loadWeekMoods(_todayDate()),
       _loadUsageStats(_todayDate()),
+      _rolloverTodosIfNeeded(),
     ]);
     if (widget.role == 'parent') {
       await _loadChildUsageFromFirestore(_todayDate());
@@ -751,6 +824,38 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   }
 
+  // Session tasks are duplicated into the daily to-do list at session start
+  // (see _startSession in session_tab.dart), tagged with sessionId+taskIndex.
+  // The session card reads tasks straight from the session doc, so a checkbox
+  // toggle here must be mirrored there or the two views drift out of sync.
+  Future<void> _syncTaskDoneToSessions(List<_Task> updated) async {
+    final bySession = <String, List<_Task>>{};
+    for (final t in updated) {
+      if (t.sessionId != null && t.taskIndex != null) {
+        bySession.putIfAbsent(t.sessionId!, () => []).add(t);
+      }
+    }
+    for (final entry in bySession.entries) {
+      final sessionRef = FirebaseFirestore.instance
+          .collection('families').doc(widget.familyId)
+          .collection('sessions').doc(entry.key);
+      try {
+        await FirebaseFirestore.instance.runTransaction((tx) async {
+          final snap = await tx.get(sessionRef);
+          if (!snap.exists) return;
+          final tasks = List<dynamic>.from(snap.data()?['tasks'] as List<dynamic>? ?? []);
+          for (final t in entry.value) {
+            final i = t.taskIndex!;
+            if (i >= 0 && i < tasks.length) {
+              tasks[i] = {...(tasks[i] as Map<String, dynamic>), 'done': t.done};
+            }
+          }
+          tx.update(sessionRef, {'tasks': tasks});
+        });
+      } catch (_) {}
+    }
+  }
+
   Future<void> _showTodoDialog() async {
     final dateKey = _dateKey(_selectedDate);
     // Load current family todos before opening dialog
@@ -765,14 +870,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             text: m['text'] as String? ?? '',
             done: m['done'] as bool? ?? false,
             addedBy: m['addedBy'] as String? ?? '',
+            sessionId: m['sessionId'] as String?,
+            taskIndex: m['taskIndex'] as int?,
           );
         }).toList();
-      } else if (dateKey == _dateKey(_todayDate())) {
-        initial = [
-          _Task(text: 'Maths', addedBy: widget.role),
-          _Task(text: '10 min YouTube', addedBy: widget.role),
-          _Task(text: '15 min Poki', addedBy: widget.role),
-        ];
       }
     } catch (_) {}
 
@@ -791,12 +892,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               'text': t.text,
               'done': t.done,
               'addedBy': t.addedBy,
+              if (t.sessionId != null) 'sessionId': t.sessionId,
+              if (t.taskIndex != null) 'taskIndex': t.taskIndex,
             }).toList(),
             'todosUpdatedAt': FieldValue.serverTimestamp(),
             'updatedByRole': widget.role,
             'updatedByAccountId': widget.accountId,
             'dateKey': dateKey,
           }, SetOptions(merge: true)).then((_) {
+            _syncTaskDoneToSessions(updated);
             if (mounted) {
               ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
                 content: Text('To-do list updated'),
@@ -846,62 +950,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   }
 
-  void _showScreenTimeLimitDialog(int? currentLimit) {
-    final isParent = widget.role == 'parent';
-    showDialog(
-      context: context,
-      builder: (_) => _ScreenTimeLimitDialog(
-        initialLimit: currentLimit ?? 120,
-        initialReminders: List.of(_screenTimeReminders),
-        usedMinutes: _usedMinutes,
-        allowEditLimit: isParent,
-        onSave: (limit, reminders) async {
-          setState(() => _screenTimeReminders = reminders);
-          if (isParent) {
-            // Persist limit to Firestore so child sees it in real-time
-            await _familySettingsRef().set({
-              'screenTimeLimitMinutes': limit,
-              'updatedByRole': 'parent',
-              'updatedByAccountId': widget.accountId,
-              'updatedAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-          }
-          _scheduleScreenTimeReminders(limit, reminders);
-        },
-      ),
-    );
-  }
-
-  Future<void> _scheduleScreenTimeReminders(int limitMins, List<int> reminders) async {
-    await NotificationService.cancelAllReminders();
-    for (int i = 0; i < reminders.length; i++) {
-      final minsLeft = reminders[i];
-      final minsUntilFire = limitMins - _usedMinutes - minsLeft;
-      if (minsUntilFire > 0) {
-        await NotificationService.scheduleReminder(
-          slotIndex: i,
-          title: 'Screen time reminder',
-          body: '$minsLeft minutes of screen time left today.',
-          delay: Duration(minutes: minsUntilFire),
-        );
-        // Write to notification inbox with the projected fire time
-        try {
-          final fireAt = DateTime.now().add(Duration(minutes: minsUntilFire));
-          await FirebaseFirestore.instance
-              .collection('families').doc(widget.familyId)
-              .collection('notifications')
-              .add({
-            'title': 'Screen time reminder',
-            'body': '$minsLeft minutes of screen time left today.',
-            'type': 'screen_time_reminder',
-            'targetRole': widget.role,
-            'dateKey': _dateKey(_todayDate()),
-            'sentAt': Timestamp.fromDate(fireAt),
-          });
-        } catch (_) {}
-      }
-    }
-  }
+  // Screen-time limit + reminders are now set from the Session tab (see
+  // session_tab.dart's _ScreenTimeLimitDialog), alongside the active session
+  // and its app list — the dashboard bar is a pure progress display that
+  // just navigates there on tap.
 
   // ── dashboard page ────────────────────────────────────────────────────────
 
@@ -922,8 +974,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 // 1 · Weekly overview: day selector + screen time bars + mood
                 _buildWeeklyOverviewChart(),
                 SizedBox(height: vGap),
-                // Keep screen time streams active for session tracking (hidden)
-                Offstage(offstage: true, child: _buildScreenTimeBar()),
                 // 2-4 · To-do/Notifications/Nudge/Time-spent, clustered in a
                 // single box with a pointer aimed at the selected day's bar.
                 _buildSelectedDayCluster(vGap),
@@ -939,9 +989,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // Wraps To-do/Notifications/Nudge/Time-spent in one box with a small
   // triangle pointer aimed at the selected day's bar in the week overview
   // widget above — makes it visually obvious these widgets reflect that day.
-  // Same green as the "Allowed" app-tag background in the session tab
-  // (session_tab.dart's _AppChips bg: const Color(0xFFE8F5E9)).
-  static const _clusterGreen = Color(0xFFE8F5E9);
+  // #71B340 at 50% opacity.
+  static const _clusterGreen = Color(0x8071B340);
 
   Widget _buildSelectedDayCluster(double vGap) {
     final cardPad  = _s(16.0, 24.0); // matches _buildWeeklyOverviewChart's horizontal padding
@@ -993,6 +1042,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                       onViewAll: () => setState(() => _selectedTab = 1),
                     ),
                   ),
+                  SizedBox(height: vGap),
+                  _buildScreenTimeBar(),
                   SizedBox(height: vGap),
                   _buildTimeSpentChart(),
                 ],
@@ -1168,14 +1219,13 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             final hadLimit = _lastKnownScreenTimeLimit != null && _lastKnownScreenTimeLimit! > 0;
             _lastKnownScreenTimeLimit = limit;
             if (widget.role == 'child') _checkLimitReached();
-            if (Platform.isIOS && widget.role == 'child') {
-              // Only restart DeviceActivity monitoring when the session+limit
-              // combination actually changes. Restarting on every stream event
-              // clears the App Group counter and prevents the extension from
-              // accumulating minutes across the session.
-              final activeMs = _activeSessionStartTime?.millisecondsSinceEpoch;
-              final monKey = '${activeMs}_$limit';
-              if (_monitoringKey != monKey && activeMs != null) {
+            if (Platform.isIOS && widget.role == 'child' && limit > 0) {
+              // Monitoring now runs all day once a limit is set — independent
+              // of whether a KTB Session is active. Only restart when the
+              // limit itself changes (or a new day starts), not on every
+              // stream event, since restarting clears the App Group counter.
+              final monKey = '${_dateKey(_todayDate())}_$limit';
+              if (_monitoringKey != monKey) {
                 _monitoringKey = monKey;
                 UsageStatsService.startScreenTimeMonitoring(
                   limitMinutes: limit,
@@ -1224,7 +1274,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   Widget _buildScreenTimeBarContent(int? limit) {
-    final isParent = widget.role == 'parent';
     final hasLimit = limit != null;
     final ratio    = hasLimit ? (_usedMinutes / limit).clamp(0.0, 1.0) : 0.0;
 
@@ -1241,11 +1290,14 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     if (hasLimit) {
       rightLabel = '$_usedMinutes / $limit min';
     } else {
-      rightLabel = isParent ? 'Tap to set limit' : 'No limit set yet';
+      rightLabel = 'No limit set yet';
     }
 
+    // Pure progress display — setting the limit and reminders now lives in
+    // the Session tab (alongside the active session and its app list), so
+    // tapping the bar just navigates there instead of opening a dialog here.
     return GestureDetector(
-      onTap: () => _showScreenTimeLimitDialog(limit),
+      onTap: () => setState(() => _selectedTab = 2),
       child: Container(
         width: double.infinity,
         padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 20), _s(16, 24), _s(16, 22)),
@@ -1305,16 +1357,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                   ),
                 ),
               ),
-            if (!isParent && hasLimit) ...[
-              SizedBox(height: _s(6, 10)),
-              Text('Limit set by your parent  •  Tap to set reminders',
-                style: TextStyle(
-                  fontFamily: 'PlusJakartaSans',
-                  fontStyle: FontStyle.italic,
-                  fontSize: _s(11, 16),
-                  color: _textLight,
-                )),
-            ],
           ],
         ),
       ),
@@ -1587,15 +1629,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               text: m['text'] as String? ?? '',
               done: m['done'] as bool? ?? false,
               addedBy: m['addedBy'] as String? ?? '',
+              sessionId: m['sessionId'] as String?,
+              taskIndex: m['taskIndex'] as int?,
             );
           }).toList() ?? [];
-        } else if (snap.connectionState != ConnectionState.waiting &&
-            dateKey == _dateKey(_todayDate())) {
-          tasks = [
-            _Task(text: 'Maths', addedBy: widget.role),
-            _Task(text: '10 min YouTube', addedBy: widget.role),
-            _Task(text: '15 min Poki', addedBy: widget.role),
-          ];
         }
         return _buildToDoCardContent(tasks);
       },
@@ -2982,13 +3019,18 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                           ),
                   ),
                 ),
-                // ── share toggle (child only) + save button (both roles) ──
+                // ── share toggle (child only) / date (parent) + save button ──
+                // Parent has no share toggle, so put the date in that same row
+                // (left-aligned, Save right-aligned) instead of a separate row
+                // below — that separate row was the source of the extra
+                // vertical whitespace in the card.
                 if (!isAnswered) ...[
                   const SizedBox(height: 10),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       // "Share with parent" only makes sense for child role
-                      if (!isParent)
+                      if (!isParent) ...[
                         InkWell(
                           borderRadius: BorderRadius.circular(12),
                           onTap: () => setState(() => _shareWithParent = !_shareWithParent),
@@ -3016,7 +3058,20 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                               )),
                           ]),
                         ),
-                      const Spacer(),
+                        const Spacer(),
+                      ] else if (dateLabel.isNotEmpty) ...[
+                        Expanded(
+                          child: Text(dateLabel,
+                            style: TextStyle(
+                              fontFamily: 'InstrumentSerif',
+                              fontSize: 12,
+                              fontStyle: FontStyle.italic,
+                              color: Colors.black.withValues(alpha: 0.5),
+                            )),
+                        ),
+                      ] else ...[
+                        const Spacer(),
+                      ],
                       SizedBox(
                         width: 110, height: 42,
                         child: ElevatedButton(
@@ -3041,8 +3096,18 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                       ),
                     ],
                   ),
-                ],
-                if (dateLabel.isNotEmpty) ...[
+                  if (!isParent && dateLabel.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Text(dateLabel,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontFamily: 'InstrumentSerif',
+                        fontSize: 12,
+                        fontStyle: FontStyle.italic,
+                        color: Colors.black.withValues(alpha: 0.5),
+                      )),
+                  ],
+                ] else if (dateLabel.isNotEmpty) ...[
                   const SizedBox(height: 8),
                   Text(dateLabel,
                     textAlign: TextAlign.center,
@@ -3120,258 +3185,6 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
       ),
     );
   }
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// Screen Time Limit Dialog — with reminder scheduler
-// ══════════════════════════════════════════════════════════════════════════════
-
-class _ScreenTimeLimitDialog extends StatefulWidget {
-  final int initialLimit;
-  final List<int> initialReminders;
-  final int usedMinutes;
-  final bool allowEditLimit;
-  final void Function(int limit, List<int> reminders) onSave;
-
-  const _ScreenTimeLimitDialog({
-    required this.initialLimit,
-    required this.initialReminders,
-    required this.usedMinutes,
-    required this.allowEditLimit,
-    required this.onSave,
-  });
-
-  @override
-  State<_ScreenTimeLimitDialog> createState() => _ScreenTimeLimitDialogState();
-}
-
-class _ScreenTimeLimitDialogState extends State<_ScreenTimeLimitDialog> {
-  late double _limitSlider;
-  late List<int> _reminders;
-  double _pendingReminder = 10; // minutes before limit for new reminder
-
-  @override
-  void initState() {
-    super.initState();
-    _limitSlider = widget.initialLimit.toDouble().clamp(15, 360);
-    _reminders = List.of(widget.initialReminders);
-  }
-
-  int get _limitMins => _limitSlider.round();
-
-  String _fmtMins(int m) {
-    if (m < 60) return '$m min';
-    final h = m ~/ 60;
-    final rem = m % 60;
-    return rem == 0 ? '${h}h' : '${h}h ${rem}m';
-  }
-
-  void _addReminder() {
-    final v = _pendingReminder.round();
-    if (!_reminders.contains(v) && _reminders.length < 5) {
-      setState(() => _reminders.add(v));
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final minsLeft = (_limitMins - widget.usedMinutes).clamp(0, _limitMins);
-
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 420),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(24, 24, 24, 20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── header ────────────────────────────────────────────────────
-              const Text('Today\'s Screen Time',
-                style: TextStyle(
-                  fontFamily: 'PlusJakartaSans',
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF1A1A2E),
-                )),
-              const SizedBox(height: 20),
-
-              // ── daily limit slider (parent only) ──────────────────────────
-              if (widget.allowEditLimit) ...[
-                Row(
-                  children: [
-                    const Text('Daily limit',
-                      style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 14,
-                          fontWeight: FontWeight.w600, color: Color(0xFF4A4A6A))),
-                    const Spacer(),
-                    Text(_fmtMins(_limitMins),
-                      style: const TextStyle(fontFamily: 'PlusJakartaSans',
-                          fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF1A1A2E))),
-                  ],
-                ),
-                SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 10),
-                    overlayShape: const RoundSliderOverlayShape(overlayRadius: 18),
-                    activeTrackColor: const Color(0xFF4A7C59),
-                    inactiveTrackColor: const Color(0xFFD0D0E0),
-                    thumbColor: const Color(0xFF4A7C59),
-                  ),
-                  child: Slider(
-                    value: _limitSlider,
-                    min: 15,
-                    max: 360,
-                    divisions: 23,
-                    onChanged: (v) => setState(() => _limitSlider = v),
-                  ),
-                ),
-                Text('Used today: ${widget.usedMinutes} min  •  $minsLeft min left',
-                  style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12,
-                      color: Color(0xFF8A8AAA))),
-              ] else ...[
-                Row(
-                  children: [
-                    const Text('Daily limit (set by parent)',
-                      style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 14,
-                          fontWeight: FontWeight.w600, color: Color(0xFF4A4A6A))),
-                    const Spacer(),
-                    Text(_fmtMins(_limitMins),
-                      style: const TextStyle(fontFamily: 'PlusJakartaSans',
-                          fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF1A1A2E))),
-                  ],
-                ),
-                const SizedBox(height: 4),
-                Text('Used today: ${widget.usedMinutes} min  •  $minsLeft min left',
-                  style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12,
-                      color: Color(0xFF8A8AAA))),
-              ],
-
-              const SizedBox(height: 22),
-              const Divider(),
-              const SizedBox(height: 14),
-
-              // ── reminders section ─────────────────────────────────────────
-              const Text('Remind me when time is running out',
-                style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 14,
-                    fontWeight: FontWeight.w600, color: Color(0xFF4A4A6A))),
-              const SizedBox(height: 6),
-              const Text('Add multiple alerts. Each fires X minutes before your limit.',
-                style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12,
-                    color: Color(0xFF8A8AAA))),
-              const SizedBox(height: 12),
-
-              // Slider + Add button
-              Row(
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('${_pendingReminder.round()} min before limit',
-                          style: const TextStyle(fontFamily: 'PlusJakartaSans',
-                              fontSize: 13, fontWeight: FontWeight.w500)),
-                        SliderTheme(
-                          data: SliderTheme.of(context).copyWith(
-                            thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 8),
-                            overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
-                            activeTrackColor: const Color(0xFF7B6FCF),
-                            inactiveTrackColor: const Color(0xFFD0D0E0),
-                            thumbColor: const Color(0xFF7B6FCF),
-                          ),
-                          child: Slider(
-                            value: _pendingReminder,
-                            min: 5,
-                            max: 60,
-                            divisions: 11,
-                            onChanged: (v) => setState(() => _pendingReminder = v),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  GestureDetector(
-                    onTap: _reminders.length >= 5 ? null : _addReminder,
-                    child: Container(
-                      width: 40,
-                      height: 40,
-                      decoration: BoxDecoration(
-                        color: _reminders.length >= 5
-                            ? const Color(0xFFE0E0E0)
-                            : const Color(0xFF4A7C59),
-                        shape: BoxShape.circle,
-                      ),
-                      child: const Icon(Icons.add, color: Colors.white, size: 20),
-                    ),
-                  ),
-                ],
-              ),
-
-              // Reminder chips
-              if (_reminders.isNotEmpty) ...[
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: _reminders.sorted().map((r) => Chip(
-                    label: Text('$r min',
-                      style: const TextStyle(fontFamily: 'PlusJakartaSans',
-                          fontSize: 13, fontWeight: FontWeight.w600)),
-                    backgroundColor: const Color(0xFFECEBF8),
-                    side: BorderSide.none,
-                    deleteIcon: const Icon(Icons.close, size: 14),
-                    deleteIconColor: const Color(0xFF8A8AAA),
-                    onDeleted: () => setState(() => _reminders.remove(r)),
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    visualDensity: VisualDensity.compact,
-                  )).toList(),
-                ),
-              ],
-
-              const SizedBox(height: 22),
-
-              // ── action buttons ────────────────────────────────────────────
-              Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                children: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('Cancel',
-                      style: TextStyle(fontFamily: 'PlusJakartaSans',
-                          color: Color(0xFF8A8AAA))),
-                  ),
-                  const SizedBox(width: 8),
-                  ElevatedButton(
-                    onPressed: () {
-                      widget.onSave(_limitMins, _reminders);
-                      Navigator.pop(context);
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4A7C59),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 24, vertical: 12),
-                    ),
-                    child: const Text('Save',
-                      style: TextStyle(fontFamily: 'PlusJakartaSans',
-                          fontWeight: FontWeight.w700)),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-extension _SortedList on List<int> {
-  List<int> sorted() => List.of(this)..sort();
 }
 
 // Small upward-pointing triangle used as the "speech bubble" pointer on the

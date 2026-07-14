@@ -463,155 +463,410 @@ async function getAdmAccessToken() {
   return parsed.access_token;
 }
 
+// Question bank, organized by delivery window then by specific
+// sub-category (not just one generic bucket per window). parent_morning
+// deliberately avoids any "so far today" / "today" framing about the
+// child's tech use — this nudge fires at 7-9am, before the child has
+// necessarily touched a device, so those questions used to be
+// unanswerable. It's reframed as forward-looking (intentions, planning,
+// general wellbeing) instead of retrospective.
 function getPromptBank() {
   return {
     parent_morning: [
+      // todays_intentions
       {
-        id: "parent_morning_1",
-        category: "parent_morning_check_in",
-        variant: "emotion_guess",
+        id: "parent_morning_intent_1",
+        category: "todays_intentions",
+        variant: "hope_for_today",
         source: "library",
         text:
-          "How do you think your child is feeling about technology " +
-          "so far today?",
+          "What's one thing you hope your child spends time on today, " +
+          "screen or otherwise?",
       },
       {
-        id: "parent_morning_2",
-        category: "parent_morning_check_in",
-        variant: "positive_curiosity",
+        id: "parent_morning_intent_2",
+        category: "todays_intentions",
+        variant: "watch_list",
         source: "library",
-        text:
-          "What do you think your child is enjoying most about " +
-          "technology today?",
+        text: "Is there a specific app or game you want to keep an eye on today?",
       },
       {
-        id: "parent_morning_3",
-        category: "parent_morning_check_in",
-        variant: "attention_reflection",
+        id: "parent_morning_intent_3",
+        category: "todays_intentions",
+        variant: "good_day_definition",
         source: "library",
         text:
-          "How connected or distracted does your child seem with " +
-          "technology today?",
+          "What would a 'good day' with technology look like for your " +
+          "child today?",
+      },
+      // general_wellbeing
+      {
+        id: "parent_morning_wellbeing_1",
+        category: "general_wellbeing",
+        variant: "sleep_and_mood",
+        source: "library",
+        text:
+          "How did your child sleep last night — do you expect that to " +
+          "affect their mood today?",
       },
       {
-        id: "parent_morning_4",
-        category: "parent_morning_check_in",
-        variant: "parent_observation",
+        id: "parent_morning_wellbeing_2",
+        category: "general_wellbeing",
+        variant: "emotional_state",
+        source: "library",
+        text: "Does your child seem excited, anxious, or neutral about today?",
+      },
+      {
+        id: "parent_morning_wellbeing_3",
+        category: "general_wellbeing",
+        variant: "whats_on_their_mind",
         source: "library",
         text:
-          "Is there anything about your child's tech use so far today " +
-          "that you are wondering about?",
+          "Is there anything on your child's mind today that might affect " +
+          "how they use their devices?",
+      },
+      // family_planning
+      {
+        id: "parent_morning_planning_1",
+        category: "family_planning",
+        variant: "screen_free_plans",
+        source: "library",
+        text: "Do you have any screen-free activities planned with your child today?",
+      },
+      {
+        id: "parent_morning_planning_2",
+        category: "family_planning",
+        variant: "day_type",
+        source: "library",
+        text:
+          "Is today a school day, weekend, or holiday — does that change " +
+          "what you expect from their screen time?",
+      },
+      {
+        id: "parent_morning_planning_3",
+        category: "family_planning",
+        variant: "device_free_moment",
+        source: "library",
+        text:
+          "Is there a family activity today where you'd like devices to " +
+          "stay put away?",
+      },
+      // parenting_reflection
+      {
+        id: "parent_morning_reflection_1",
+        category: "parenting_reflection",
+        variant: "boundary_reinforcement",
+        source: "library",
+        text: "What's one boundary around technology you want to reinforce today?",
+      },
+      {
+        id: "parent_morning_reflection_2",
+        category: "parenting_reflection",
+        variant: "follow_up_conversation",
+        source: "library",
+        text:
+          "Is there a recent conversation about screens you want to " +
+          "follow up on today?",
+      },
+      {
+        id: "parent_morning_reflection_3",
+        category: "parenting_reflection",
+        variant: "modeling_behavior",
+        source: "library",
+        text:
+          "What's one thing you're hoping to model for your child today, " +
+          "tech-related or not?",
       },
     ],
 
     child_afternoon: [
+      // mood_and_screens
       {
-        id: "child_afternoon_1",
-        category: "child_afternoon_check_in",
-        variant: "emotion_check",
+        id: "child_afternoon_mood_1",
+        category: "mood_and_screens",
+        variant: "feelings_check",
         source: "library",
-        text: "How are you feeling about your screen time today?",
+        text: "How are you feeling about your screen time so far today?",
       },
       {
-        id: "child_afternoon_2",
-        category: "child_afternoon_check_in",
-        variant: "positive_or_frustrating",
+        id: "child_afternoon_mood_2",
+        category: "mood_and_screens",
+        variant: "good_moment",
         source: "library",
-        text: "Has anything online felt fun or frustrating today?",
+        text: "Has anything online made you laugh, smile, or feel good today?",
       },
       {
-        id: "child_afternoon_3",
-        category: "child_afternoon_check_in",
-        variant: "activity_reflection",
+        id: "child_afternoon_mood_3",
+        category: "mood_and_screens",
+        variant: "chill_vs_chaotic",
         source: "library",
         text:
-          "What kind of screen activity has stood out to you today?",
+          "On a scale of chill to chaotic, how has your screen time felt " +
+          "today?",
+      },
+      // specific_activity
+      {
+        id: "child_afternoon_activity_1",
+        category: "specific_activity",
+        variant: "most_time_spent",
+        source: "library",
+        text: "What app or game have you spent the most time on today?",
       },
       {
-        id: "child_afternoon_4",
-        category: "child_afternoon_check_in",
-        variant: "open_reflection",
+        id: "child_afternoon_activity_2",
+        category: "specific_activity",
+        variant: "made_or_learned",
+        source: "library",
+        text: "Did you make or learn anything using a screen today?",
+      },
+      {
+        id: "child_afternoon_activity_3",
+        category: "specific_activity",
+        variant: "most_interesting",
+        source: "library",
+        text: "What's the most interesting thing you've done on a screen today?",
+      },
+      // social_online
+      {
+        id: "child_afternoon_social_1",
+        category: "social_online",
+        variant: "friends_online",
+        source: "library",
+        text: "Did you talk to any friends online today? How did that feel?",
+      },
+      {
+        id: "child_afternoon_social_2",
+        category: "social_online",
+        variant: "stuck_with_you",
+        source: "library",
+        text: "Has anything you saw online today stuck with you?",
+      },
+      {
+        id: "child_afternoon_social_3",
+        category: "social_online",
+        variant: "proud_share",
+        source: "library",
+        text: "Did you share anything online today you were proud of?",
+      },
+      // frustration_check
+      {
+        id: "child_afternoon_frustration_1",
+        category: "frustration_check",
+        variant: "annoyance_check",
         source: "library",
         text:
-          "What is something interesting, fun, or annoying that " +
-          "happened online today?",
+          "Was there anything about using a screen today that felt " +
+          "frustrating or annoying?",
+      },
+      {
+        id: "child_afternoon_frustration_2",
+        category: "frustration_check",
+        variant: "made_it_worse",
+        source: "library",
+        text: "Did any app or website make you feel worse instead of better today?",
+      },
+      {
+        id: "child_afternoon_frustration_3",
+        category: "frustration_check",
+        variant: "wish_different",
+        source: "library",
+        text: "Is there anything about your screen time today you wish had gone differently?",
       },
     ],
 
     parent_evening: [
+      // daily_observation
       {
-        id: "parent_evening_1",
-        category: "parent_evening_reflection",
-        variant: "general_observation",
+        id: "parent_evening_observation_1",
+        category: "daily_observation",
+        variant: "relationship_with_screens",
         source: "library",
         text:
-          "Did you notice anything about your child's technology use " +
-          "today?",
+          "Looking back at today, how would you describe your child's " +
+          "relationship with screens?",
       },
       {
-        id: "parent_evening_2",
-        category: "parent_evening_reflection",
-        variant: "engaged_or_frustrated",
+        id: "parent_evening_observation_2",
+        category: "daily_observation",
+        variant: "needs_a_break",
         source: "library",
         text:
-          "Was there a moment today when your child seemed engaged " +
-          "or frustrated with screens?",
+          "Did you see any signs today that your child might need a tech " +
+          "break tomorrow?",
       },
       {
-        id: "parent_evening_3",
-        category: "parent_evening_reflection",
-        variant: "parent_reflection",
+        id: "parent_evening_observation_3",
+        category: "daily_observation",
+        variant: "surprised_you",
         source: "library",
         text:
-          "Did anything about today's tech use stand out to you as " +
-          "a parent?",
+          "What's one thing you noticed about your child's tech use today " +
+          "that surprised you?",
+      },
+      // connection_moments
+      {
+        id: "parent_evening_connection_1",
+        category: "connection_moments",
+        variant: "tech_helped_connect",
+        source: "library",
+        text:
+          "Was there a moment today when technology helped you connect " +
+          "with your child, rather than distract?",
       },
       {
-        id: "parent_evening_4",
-        category: "parent_evening_reflection",
-        variant: "positive_or_challenging",
+        id: "parent_evening_connection_2",
+        category: "connection_moments",
+        variant: "screens_got_in_way",
+        source: "library",
+        text: "Did screens get in the way of a conversation or activity today?",
+      },
+      {
+        id: "parent_evening_connection_3",
+        category: "connection_moments",
+        variant: "screen_free_together",
+        source: "library",
+        text: "Did you and your child do anything screen-free together today?",
+      },
+      // balance_check
+      {
+        id: "parent_evening_balance_1",
+        category: "balance_check",
+        variant: "more_or_less_than_expected",
+        source: "library",
+        text: "Compared to a typical day, was today more or less screen time than expected?",
+      },
+      {
+        id: "parent_evening_balance_2",
+        category: "balance_check",
+        variant: "other_activities",
         source: "library",
         text:
-          "Did you notice anything positive or challenging about " +
-          "your child's screen time today?",
+          "Did your child balance screen time with other activities " +
+          "today (outdoors, reading, chores)?",
+      },
+      {
+        id: "parent_evening_balance_3",
+        category: "balance_check",
+        variant: "self_regulation",
+        source: "library",
+        text:
+          "Did your child seem to self-regulate their screen time today, " +
+          "or need reminders?",
+      },
+      // tomorrow_prep
+      {
+        id: "parent_evening_prep_1",
+        category: "tomorrow_prep",
+        variant: "try_differently",
+        source: "library",
+        text: "Is there anything you want to try differently with screen time tomorrow?",
+      },
+      {
+        id: "parent_evening_prep_2",
+        category: "tomorrow_prep",
+        variant: "boundary_or_reward",
+        source: "library",
+        text: "Do you want to set a new boundary or reward based on today?",
+      },
+      {
+        id: "parent_evening_prep_3",
+        category: "tomorrow_prep",
+        variant: "praise_or_address",
+        source: "library",
+        text:
+          "Is there something you want to praise or address with your " +
+          "child about today's screen use?",
       },
     ],
 
     child_night: [
+      // gratitude_and_highlights
       {
-        id: "child_night_1",
-        category: "child_night_reflection",
-        variant: "good_or_difficult",
+        id: "child_night_gratitude_1",
+        category: "gratitude_and_highlights",
+        variant: "good_screen_moment",
         source: "library",
-        text:
-          "What was one good or difficult thing about your screen " +
-          "time today?",
+        text: "What's one good thing that happened on your screen today?",
       },
       {
-        id: "child_night_2",
-        category: "child_night_reflection",
-        variant: "most_interesting",
+        id: "child_night_gratitude_2",
+        category: "gratitude_and_highlights",
+        variant: "grateful_for",
         source: "library",
-        text:
-          "What was the most interesting thing you did online today?",
+        text: "What are you grateful for from today, screen-related or not?",
       },
       {
-        id: "child_night_3",
-        category: "child_night_reflection",
-        variant: "emotion_reflection",
+        id: "child_night_gratitude_3",
+        category: "gratitude_and_highlights",
+        variant: "best_part_of_day",
         source: "library",
-        text:
-          "Was there anything online today that made you feel really " +
-          "good or not so good?",
+        text: "What was the best part of your day today?",
+      },
+      // self_awareness
+      {
+        id: "child_night_awareness_1",
+        category: "self_awareness",
+        variant: "spent_time_as_wanted",
+        source: "library",
+        text: "Do you think you spent your screen time today the way you wanted to?",
       },
       {
-        id: "child_night_4",
-        category: "child_night_reflection",
-        variant: "remember_or_talk",
+        id: "child_night_awareness_2",
+        category: "self_awareness",
+        variant: "do_differently",
         source: "library",
-        text:
-          "What is one thing about your screen time today that you " +
-          "want to remember or talk about?",
+        text: "Is there anything you'd do differently with your screen time tomorrow?",
+      },
+      {
+        id: "child_night_awareness_3",
+        category: "self_awareness",
+        variant: "before_and_after_feeling",
+        source: "library",
+        text: "Did you notice how you felt before and after using screens today?",
+      },
+      // tomorrow_goals
+      {
+        id: "child_night_goals_1",
+        category: "tomorrow_goals",
+        variant: "want_to_do_tomorrow",
+        source: "library",
+        text: "Is there something fun or productive you want to do on a screen tomorrow?",
+      },
+      {
+        id: "child_night_goals_2",
+        category: "tomorrow_goals",
+        variant: "want_to_do_less",
+        source: "library",
+        text: "Is there an app or game you want to spend less time on tomorrow?",
+      },
+      {
+        id: "child_night_goals_3",
+        category: "tomorrow_goals",
+        variant: "non_screen_goal",
+        source: "library",
+        text: "What's one thing you want to do tomorrow that isn't on a screen?",
+      },
+      // sleep_and_screens
+      {
+        id: "child_night_sleep_1",
+        category: "sleep_and_screens",
+        variant: "ready_for_bed",
+        source: "library",
+        text: "Do you feel ready to put your screen away and get good sleep tonight?",
+      },
+      {
+        id: "child_night_sleep_2",
+        category: "sleep_and_screens",
+        variant: "relax_or_wind_up",
+        source: "library",
+        text: "Did screens help you relax tonight, or make it harder to wind down?",
+      },
+      {
+        id: "child_night_sleep_3",
+        category: "sleep_and_screens",
+        variant: "time_before_bed",
+        source: "library",
+        text: "How much time before bed did you put your screen away tonight?",
       },
     ],
   };
@@ -626,6 +881,13 @@ function pickRandom(items) {
   return items[index];
 }
 
+// Excludes prompt ids used in the last RECENT_PROMPT_HISTORY nudges for this
+// account+window (not just the single most recent one) — with only 3-4
+// prompts per window before, excluding just the last pick meant the same
+// question could reappear the very next time it was sent; a 5-nudge lookback
+// keeps things feeling varied even before the bigger bank existed.
+const RECENT_PROMPT_HISTORY = 5;
+
 async function pickPromptForAccount(
     db,
     familyId,
@@ -639,27 +901,28 @@ async function pickPromptForAccount(
     return null;
   }
 
-  const latestSnapshot = await db
+  const recentSnapshot = await db
       .collection("families")
       .doc(familyId)
       .collection("nudges")
       .where("targetAccountId", "==", accountId)
       .where("deliveryWindow", "==", deliveryWindow)
       .orderBy("createdAt", "desc")
-      .limit(1)
+      .limit(RECENT_PROMPT_HISTORY)
       .get();
 
-  let lastPromptId = null;
-
-  if (!latestSnapshot.empty) {
-    const latestData = latestSnapshot.docs[0].data();
-    lastPromptId = latestData.promptId || null;
-  }
+  const recentPromptIds = new Set(
+      recentSnapshot.docs
+          .map((doc) => doc.data().promptId)
+          .filter((id) => !!id),
+  );
 
   let eligiblePrompts = prompts;
 
-  if (lastPromptId) {
-    const filtered = prompts.filter((prompt) => prompt.id !== lastPromptId);
+  if (recentPromptIds.size > 0) {
+    const filtered = prompts.filter(
+        (prompt) => !recentPromptIds.has(prompt.id),
+    );
 
     if (filtered.length > 0) {
       eligiblePrompts = filtered;
@@ -887,15 +1150,52 @@ function getRandomScheduledTime(dateKey, startHour, endHour) {
   );
 }
 
-function getScheduledTimeForWindow(dateKey, deliveryWindow) {
+// Defaults match the original hardcoded ranges — used when a family hasn't
+// customized their child's nudge delivery windows yet.
+const DEFAULT_CHILD_WINDOWS = {
+  child_afternoon: {startHour: 15, endHour: 17},
+  child_night: {startHour: 18, endHour: 20},
+};
+
+// Reads the parent-configured delivery windows for the child's two daily
+// nudges from families/{familyId}/settings/nudges (set via the "Nudge
+// delivery window for the child" UI in the Nudges tab). Falls back to
+// DEFAULT_CHILD_WINDOWS for any window not yet customized. Only the child's
+// windows are configurable this way — parent_morning/parent_evening stay
+// fixed, since this feature is specifically about the child's delivery times.
+async function getChildNudgeWindows(db, familyId) {
+  try {
+    const doc = await db
+        .collection("families")
+        .doc(familyId)
+        .collection("settings")
+        .doc("nudges")
+        .get();
+
+    if (!doc.exists) {
+      return DEFAULT_CHILD_WINDOWS;
+    }
+
+    const data = doc.data() || {};
+    return {
+      child_afternoon: data.childWindow1 || DEFAULT_CHILD_WINDOWS.child_afternoon,
+      child_night: data.childWindow2 || DEFAULT_CHILD_WINDOWS.child_night,
+    };
+  } catch (err) {
+    console.error("Failed to read nudge window settings, using defaults:", err);
+    return DEFAULT_CHILD_WINDOWS;
+  }
+}
+
+function getScheduledTimeForWindow(dateKey, deliveryWindow, childWindows) {
   if (deliveryWindow === "parent_morning") {
     return getRandomScheduledTime(dateKey, 7, 9);
-  } else if (deliveryWindow === "child_afternoon") {
-    return getRandomScheduledTime(dateKey, 15, 17);
-  } else if (deliveryWindow === "child_night") {
-    return getRandomScheduledTime(dateKey, 18, 20);
   } else if (deliveryWindow === "parent_evening") {
     return getRandomScheduledTime(dateKey, 20, 22);
+  } else if (deliveryWindow === "child_afternoon" || deliveryWindow === "child_night") {
+    const windows = childWindows || DEFAULT_CHILD_WINDOWS;
+    const range = windows[deliveryWindow] || DEFAULT_CHILD_WINDOWS[deliveryWindow];
+    return getRandomScheduledTime(dateKey, range.startHour, range.endHour);
   }
 
   return null;
@@ -992,6 +1292,7 @@ exports.generateDailyNudges = functions
 
       for (const familyDoc of familiesSnapshot.docs) {
         const familyId = familyDoc.id;
+        const childWindows = await getChildNudgeWindows(db, familyId);
 
         const accountsSnapshot = await db
             .collection("families")
@@ -1105,6 +1406,7 @@ exports.generateDailyNudges = functions
             const scheduledForTime = getScheduledTimeForWindow(
                 dateKey,
                 deliveryWindow,
+                childWindows,
             );
 
             if (!scheduledForTime) {
@@ -1174,6 +1476,7 @@ exports.generateTestNudges = functions
 
       for (const familyDoc of familiesSnapshot.docs) {
         const familyId = familyDoc.id;
+        const childWindows = await getChildNudgeWindows(db, familyId);
 
         const accountsSnapshot = await db
             .collection("families")
@@ -1294,6 +1597,7 @@ exports.generateTestNudges = functions
               scheduledForTime = getScheduledTimeForWindow(
                   dateKey,
                   deliveryWindow,
+                  childWindows,
               );
 
               if (!scheduledForTime) {
@@ -2181,6 +2485,85 @@ exports.notifyOnMoodUpdate = functions.firestore
         );
       } catch (err) {
         console.error("notifyOnMoodUpdate failed:", err);
+      }
+
+      return null;
+    });
+
+// ── Trigger: session ends → notify both parent and child ─────────────────────
+
+exports.notifyOnSessionEnded = functions.firestore
+    .document("families/{familyId}/sessions/{sessionId}")
+    .onWrite(async (change, context) => {
+      const after = change.after.exists ? change.after.data() : null;
+      const before = change.before.exists ? change.before.data() : null;
+
+      if (!after) return null;
+
+      const endedStatuses = ["completed", "completed_override"];
+      const wasEnded = before && endedStatuses.includes(before.status);
+      const isEnded = endedStatuses.includes(after.status);
+      // startTime is only set once a session actually starts (see
+      // _startSession in session_tab.dart) — a pending session cancelled
+      // before ever starting reuses "completed" as its status too, but
+      // that's not a real session ending and shouldn't notify anyone.
+      if (!isEnded || wasEnded || !after.startTime) return null;
+
+      const familyId = context.params.familyId;
+      const db = admin.firestore();
+      const title = "Session ended";
+      const body = "The screen time session has ended.";
+
+      try {
+        const [parentSent, childSent] = await Promise.all([
+          sendPushToFamilyRole(db, familyId, "parent", title, body,
+              {type: "session_ended", familyId}),
+          sendPushToFamilyRole(db, familyId, "child", title, body,
+              {type: "session_ended", familyId}),
+        ]);
+        await Promise.all([
+          writeNotificationDoc(db, familyId, {
+            title, body, type: "session_ended", targetRole: "parent",
+          }),
+          writeNotificationDoc(db, familyId, {
+            title, body, type: "session_ended", targetRole: "child",
+          }),
+        ]);
+        console.log(
+            `notifyOnSessionEnded: parent=${parentSent} child=${childSent}`,
+            "family:", familyId,
+        );
+      } catch (err) {
+        console.error("notifyOnSessionEnded failed:", err);
+      }
+
+      // Reset today's screen-time bar and the limit-reached flag now that the
+      // session is over. screenTimeLimitMinutes is per-session (equal to that
+      // session's duration), so leftover usedMinutes/limitReachedAt from this
+      // session must not carry into the next one or bleed into future app
+      // opens — otherwise the client re-fires "limit reached" on every login
+      // since limitReachedAt/limitReachedDateKey never change while stale.
+      const dateKey = after.dateKey;
+      if (dateKey) {
+        try {
+          await Promise.all([
+            db.collection("families").doc(familyId)
+                .collection("dashboard_days").doc(dateKey)
+                .set({
+                  screenTimeUsedMinutes: 0,
+                  screenTimeLastUpdatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                }, {merge: true}),
+            db.collection("families").doc(familyId)
+                .collection("settings").doc("screenTime")
+                .set({
+                  limitReachedAt: admin.firestore.FieldValue.delete(),
+                  limitReachedDateKey: admin.firestore.FieldValue.delete(),
+                }, {merge: true}),
+          ]);
+          console.log(`notifyOnSessionEnded: reset screen time for family ${familyId}, date ${dateKey}`);
+        } catch (err) {
+          console.error("notifyOnSessionEnded reset failed:", err);
+        }
       }
 
       return null;

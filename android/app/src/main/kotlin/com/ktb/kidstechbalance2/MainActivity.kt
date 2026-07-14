@@ -116,8 +116,12 @@ class MainActivity : FlutterActivity() {
                     }
                     "startBlockingService" -> {
                         val packages = call.argument<List<String>>("allowedPackages") ?: emptyList()
+                        val familyId = call.argument<String>("familyId") ?: ""
+                        val sessionId = call.argument<String>("sessionId") ?: ""
                         val intent = Intent(this, AppBlockerService::class.java).apply {
                             putStringArrayListExtra("allowedPackages", ArrayList(packages))
+                            putExtra("familyId", familyId)
+                            putExtra("sessionId", sessionId)
                         }
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                             startForegroundService(intent)

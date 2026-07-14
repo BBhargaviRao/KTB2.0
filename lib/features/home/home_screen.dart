@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -5,7 +6,65 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:io' show Platform;
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ktb2/features/dashboard/dashboard_screen.dart';
+
+const String kSavedFamilyCodeKey = 'ktb_saved_family_code';
+const String kSavedPinKey        = 'ktb_saved_pin';
+
+// Called from DashboardScreen (already reached, not the login screen) so a
+// hang or slow resolution in SharedPreferences can never strand the user
+// before SessionTab mounts — that previously silently blocked the Android
+// blocking service from starting for an already-active session. This is a
+// convenience feature only, so the whole body is defensive.
+Future<void> maybePromptToSaveLogin(
+  BuildContext context, {
+  required String familyCode,
+  required String pin,
+}) async {
+  try {
+    final prefs = await SharedPreferences.getInstance();
+    final alreadySaved = prefs.getString(kSavedFamilyCodeKey) == familyCode &&
+        prefs.getString(kSavedPinKey) == pin;
+    if (alreadySaved || !context.mounted) return;
+
+    // Auto-dismiss after a few seconds so an unanswered dialog can't block.
+    Timer? autoClose;
+    final shouldSave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        autoClose = Timer(const Duration(seconds: 6), () {
+          if (Navigator.of(ctx).canPop()) Navigator.of(ctx).pop(false);
+        });
+        return AlertDialog(
+          title: const Text('Save login?'),
+          content: const Text(
+            'Save your Family Code and PIN on this device so you can skip '
+            'typing them next time — just tap Continue.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Not now'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(true),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    autoClose?.cancel();
+
+    if (shouldSave == true) {
+      await prefs.setString(kSavedFamilyCodeKey, familyCode);
+      await prefs.setString(kSavedPinKey, pin);
+    }
+  } catch (e) {
+    print('KTB: maybePromptToSaveLogin failed (non-fatal): $e');
+  }
+}
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -85,7 +144,28 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
   final _familyCodeCtrl = TextEditingController();
   final _pinCtrl = TextEditingController();
 
-  bool _pinHidden = false;
+  bool _pinHidden = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedLogin();
+  }
+
+  Future<void> _loadSavedLogin() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final savedCode = prefs.getString(kSavedFamilyCodeKey);
+      final savedPin  = prefs.getString(kSavedPinKey);
+      if (savedCode == null || savedPin == null || !mounted) return;
+      setState(() {
+        _familyCodeCtrl.text = savedCode;
+        _pinCtrl.text = savedPin;
+      });
+    } catch (e) {
+      print('KTB: _loadSavedLogin failed (non-fatal): $e');
+    }
+  }
 
   @override
   void dispose() {
@@ -301,7 +381,16 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
 
       if (!mounted) return;
 
+      if (!mounted) return;
+
       if (role == 'parent' || role == 'child') {
+        // The save-login prompt must never gate reaching the Dashboard — a
+        // hang or slow resolution in SharedPreferences on one device left
+        // the user stuck on this screen indefinitely when it was awaited
+        // here, with SessionTab never mounting and the Android blocking
+        // service never starting for an already-active session. Pass the
+        // credentials through and let DashboardScreen show the prompt on
+        // its own, already-reached screen instead.
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => DashboardScreen(
@@ -309,6 +398,8 @@ class _FamilyCodeCardState extends State<_FamilyCodeCard> {
               role: role,
               familyId: familyId,
               accountId: accountId,
+              pendingSaveLoginFamilyCode: familyCode,
+              pendingSaveLoginPin: pin,
             ),
           ),
         );

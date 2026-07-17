@@ -180,24 +180,19 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         return;
       }
 
-      // Extension hasn't fired yet — relay native (wall-clock) timer to Firestore
-      // so the parent sees live session data even before the first 5-min threshold.
-      // Once the extension fires it will overwrite this with accurate screen-on time.
+      // Extension hasn't fired yet (no real per-app usage confirmed yet).
+      // getSessionElapsedMinutes is WALL-CLOCK time since the session
+      // started — it advances identically whether the child is in an
+      // allowed app or just sitting idle on the home screen, so it must
+      // never be written to Firestore's shared screenTimeUsedMinutes (that
+      // previously made the parent's bar climb for a child who hadn't
+      // opened anything). It's kept as a *local-only* rough estimate so the
+      // child's own screen shows some feedback before real data exists —
+      // the parent-facing value stays untouched (0, accurately) until the
+      // extension confirms genuine app usage.
       final elapsed = await UsageStatsService.getSessionElapsedMinutes();
       if (!mounted) return;
-      if (elapsed > 0 && !_extensionHasFired && elapsed > _firestoreScreenTimeMinutes) {
-        FirebaseFirestore.instance
-            .collection('families').doc(widget.familyId)
-            .collection('dashboard_days').doc(dateKey)
-            .set({
-              'screenTimeUsedMinutes': elapsed,
-              'screenTimeLastUpdatedAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-        if (mounted) setState(() {
-          _nativeSessionMinutes = elapsed;
-          _firestoreScreenTimeMinutes = elapsed;
-        });
-      } else if (elapsed != _nativeSessionMinutes && mounted) {
+      if (elapsed != _nativeSessionMinutes) {
         setState(() => _nativeSessionMinutes = elapsed);
       }
     }
@@ -1222,15 +1217,20 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             if (Platform.isIOS && widget.role == 'child' && limit > 0) {
               // Monitoring now runs all day once a limit is set — independent
               // of whether a KTB Session is active. Only restart when the
-              // limit itself changes (or a new day starts), not on every
-              // stream event, since restarting clears the App Group counter.
-              final monKey = '${_dateKey(_todayDate())}_$limit';
+              // limit+session itself changes (or a new day starts), not on
+              // every stream event, since restarting clears the App Group
+              // counter. sessionStartMillis (not just limit) is part of the
+              // key so two same-duration sessions on the same day are still
+              // recognized as distinct and each start their counter at 0 —
+              // limit alone can't tell them apart.
+              final monKey = '${_dateKey(_todayDate())}_${limit}_${sessionStartMillis ?? 0}';
               if (_monitoringKey != monKey) {
                 _monitoringKey = monKey;
                 UsageStatsService.startScreenTimeMonitoring(
                   limitMinutes: limit,
                   dateKey: _dateKey(_todayDate()),
                   familyId: widget.familyId,
+                  sessionStartMillis: sessionStartMillis,
                 ).then((ok) {
                   if (!ok && mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

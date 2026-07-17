@@ -2569,4 +2569,74 @@ exports.notifyOnSessionEnded = functions.firestore
       return null;
     });
 
+// ── Scheduled: silently wake iOS child devices with active sessions ──────────
+// so the MAIN APP (not the short-lived DeviceActivityMonitor extension) can
+// relay real screen-time minutes to Firestore even while KTB is backgrounded.
+// The extension's own local App Group write is always accurate (confirmed by
+// testing) — only its own network hop is unreliable, because the extension
+// process is torn down by iOS almost immediately after firing. A full app
+// woken by a silent push gets a real background-execution budget via
+// application(_:didReceiveRemoteNotification:fetchCompletionHandler:), which
+// is enough time to read that same App Group value and PATCH it to Firestore
+// over the normal, reliable network path.
+//
+// This can only wake an app that's backgrounded, not one the user has
+// force-quit — iOS blocks all background wake-ups (silent push included)
+// after an explicit force-quit until the app is manually reopened. That's a
+// hard platform limit with no workaround, not a gap in this function.
+exports.relayActiveSessionScreenTime = functions.pubsub
+    .schedule("every 1 minutes")
+    .onRun(async () => {
+      const db = admin.firestore();
+
+      const activeSnap = await db.collectionGroup("sessions")
+          .where("status", "==", "active")
+          .get();
+
+      const familyIds = new Set();
+      activeSnap.forEach((doc) => {
+        familyIds.add(doc.ref.parent.parent.id);
+      });
+
+      if (familyIds.size === 0) return null;
+
+      let sent = 0;
+      for (const familyId of familyIds) {
+        try {
+          const accountsSnap = await db
+              .collection("families").doc(familyId)
+              .collection("accounts")
+              .where("role", "==", "child")
+              .get();
+
+          for (const accountDoc of accountsSnap.docs) {
+            const deviceSnap = await db.collection("device_registrations")
+                .where("familyId", "==", familyId)
+                .where("accountId", "==", accountDoc.id)
+                .where("platform", "==", "ios")
+                .limit(1)
+                .get();
+
+            if (deviceSnap.empty) continue;
+            const fcmToken = deviceSnap.docs[0].data().fcmToken;
+            if (!fcmToken) continue;
+
+            await admin.messaging().send({
+              token: fcmToken,
+              data: {type: "screentime_relay", familyId},
+              apns: {
+                headers: {"apns-priority": "5", "apns-push-type": "background"},
+                payload: {aps: {"content-available": 1}},
+              },
+            });
+            sent++;
+          }
+        } catch (err) {
+          console.error(`relayActiveSessionScreenTime failed for family ${familyId}:`, err.message);
+        }
+      }
+      console.log(`relayActiveSessionScreenTime: sent ${sent} silent push(es)`);
+      return null;
+    });
+
 console.log("index.js finished loading");

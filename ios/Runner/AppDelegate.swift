@@ -10,6 +10,11 @@ import ManagedSettings
 private let kGroupId   = "group.com.ktb.kidstechbalance2"
 private let kRealMins  = "ktb_real_minutes_"
 
+// Same Firestore REST endpoint/key as KtbActivityMonitor.swift — used by the
+// silent-push background relay below.
+private let kFirestoreProjectId = "ktb2-kidstechbalance"
+private let kFirestoreApiKey    = "AIzaSyBwmXPgchb0wWni_ViA-qCWONg-pVSyZP0"
+
 @available(iOS 16.0, *)
 extension DeviceActivityName {
   static let ktbDaily = Self("ktb.daily")
@@ -225,15 +230,36 @@ struct FamilyPickerScreen: View {
             // Sets up DeviceActivityCenter with threshold events.
             // The KtbActivityMonitor extension fires at each threshold and writes
             // cumulative minutes to both App Group AND Firestore REST API directly.
-            let args         = call.arguments as? [String: Any]
-            let limitMinutes = args?["limitMinutes"] as? Int    ?? 120
-            let dateKey      = args?["dateKey"]      as? String ?? ""
-            let familyId     = args?["familyId"]     as? String ?? ""
+            let args              = call.arguments as? [String: Any]
+            let limitMinutes      = args?["limitMinutes"] as? Int    ?? 120
+            let dateKey           = args?["dateKey"]      as? String ?? ""
+            let familyId          = args?["familyId"]     as? String ?? ""
+            let sessionStartMillis = args?["sessionStartMillis"] as? Int ?? 0
 
             // Store context in App Group so the extension can read it without SDK.
             let grp = UserDefaults(suiteName: kGroupId)
             grp?.set(limitMinutes, forKey: "ktb_limit_\(dateKey)")
             if !familyId.isEmpty { grp?.set(familyId, forKey: "ktb_family_id") }
+
+            // Idempotency guard persisted natively (survives the app being
+            // closed and reopened, unlike Dart's in-memory _monitoringKey).
+            // Reopening KTB mid-session used to re-run this whole setup —
+            // same dateKey+limit, but the Dart-side guard reset to null on a
+            // fresh widget instance — which wiped the App Group counter back
+            // to 0 every time, and the dashboard bar fell back to a
+            // wall-clock elapsed-time relay until the next real threshold
+            // fired, making it look like screen time was accruing even while
+            // the child sat on the home screen. Skip the reset entirely if
+            // monitoring is already active for this exact session — keyed by
+            // sessionStartMillis (not just dateKey+limit) so two same-
+            // duration sessions on the same day are still told apart and
+            // each genuinely start their counter at 0.
+            let monitoringKey = "\(dateKey)_\(limitMinutes)_\(sessionStartMillis)"
+            if grp?.string(forKey: "ktb_monitoring_key") == monitoringKey,
+               grp?.string(forKey: "ktb_monitor_status") == "ok" {
+              result(true)
+              return
+            }
 
             let center = DeviceActivityCenter()
             center.stopMonitoring([.ktbDaily])
@@ -306,6 +332,7 @@ struct FamilyPickerScreen: View {
               try center.startMonitoring(.ktbDaily, during: schedule, events: events)
               // Write success marker so getIosSessionMinutes can surface it.
               UserDefaults(suiteName: kGroupId)?.set("ok", forKey: "ktb_monitor_status")
+              UserDefaults(suiteName: kGroupId)?.set(monitoringKey, forKey: "ktb_monitoring_key")
               result(true)
             } catch {
               UserDefaults(suiteName: kGroupId)?.set(
@@ -430,6 +457,119 @@ struct FamilyPickerScreen: View {
         name: UIApplication.protectedDataDidBecomeAvailableNotification, object: nil)
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  // ── Silent push: relay screen time while backgrounded ─────────────────────
+  // relayActiveSessionScreenTime (functions/index.js) sends a silent
+  // (content-available) push roughly every minute while a session is active.
+  // Unlike the KtbActivityMonitor extension — whose process is torn down
+  // almost instantly, before any network call can land — the FULL APP gets a
+  // real background-execution budget here, long enough to read the
+  // extension's local App Group value and PATCH it to Firestore over the
+  // normal, reliable network path. This only fires while KTB is backgrounded,
+  // not force-quit — iOS blocks all background wake-ups (silent push
+  // included) after an explicit force-quit until the app is manually
+  // reopened; that's a hard platform limit, not something this can work around.
+  override func application(
+    _ application: UIApplication,
+    didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+    fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+  ) {
+    guard (userInfo["type"] as? String) == "screentime_relay",
+          let familyId = userInfo["familyId"] as? String, !familyId.isEmpty else {
+      completionHandler(.noData)
+      return
+    }
+
+    let f = DateFormatter()
+    f.dateFormat = "yyyy-MM-dd"
+    let dateKey = f.string(from: Date())
+    let minutes = UserDefaults(suiteName: kGroupId)?.integer(forKey: kRealMins + dateKey) ?? 0
+
+    // Diagnostic marker, written unconditionally (even when minutes == 0),
+    // so we can tell from Firestore alone whether the push is reaching this
+    // handler at all, separate from whether there's data worth relaying yet.
+    writeDiagnosticMarker(familyId: familyId, minutes: minutes)
+
+    guard minutes > 0 else {
+      completionHandler(.noData)
+      return
+    }
+
+    let urlStr = "https://firestore.googleapis.com/v1/projects/\(kFirestoreProjectId)" +
+      "/databases/(default)/documents/families/\(familyId)" +
+      "/dashboard_days/\(dateKey)" +
+      "?key=\(kFirestoreApiKey)" +
+      "&updateMask.fieldPaths=screenTimeUsedMinutes" +
+      "&updateMask.fieldPaths=screenTimeLastUpdatedAt"
+    guard let url = URL(string: urlStr) else {
+      completionHandler(.failed)
+      return
+    }
+
+    let iso = ISO8601DateFormatter().string(from: Date())
+    let body: [String: Any] = [
+      "fields": [
+        "screenTimeUsedMinutes": ["integerValue": "\(minutes)"],
+        "screenTimeLastUpdatedAt": ["timestampValue": iso],
+      ]
+    ]
+    guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else {
+      completionHandler(.failed)
+      return
+    }
+
+    var req = URLRequest(url: url)
+    req.httpMethod = "PATCH"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    req.httpBody = bodyData
+    req.timeoutInterval = 25
+
+    // Extends our runtime past the ~30s the OS already grants for a remote-
+    // notification wake, so the request has room to finish even if the
+    // system is about to reclaim time from us.
+    var bgTask: UIBackgroundTaskIdentifier = .invalid
+    bgTask = application.beginBackgroundTask {
+      if bgTask != .invalid { application.endBackgroundTask(bgTask); bgTask = .invalid }
+    }
+
+    URLSession.shared.dataTask(with: req) { _, _, error in
+      if let error = error {
+        print("KTB: relay push upload failed: \(error.localizedDescription)")
+        completionHandler(.failed)
+      } else {
+        completionHandler(.newData)
+      }
+      if bgTask != .invalid { application.endBackgroundTask(bgTask); bgTask = .invalid }
+    }.resume()
+  }
+
+  // Fire-and-forget diagnostic so we can tell from Firestore alone whether
+  // silent pushes are reaching this handler at all — separate from whether
+  // there's non-zero screen time to relay yet. Temporary instrumentation for
+  // debugging the background-relay path; safe to remove once confirmed solid.
+  private func writeDiagnosticMarker(familyId: String, minutes: Int) {
+    let urlStr = "https://firestore.googleapis.com/v1/projects/\(kFirestoreProjectId)" +
+      "/databases/(default)/documents/families/\(familyId)" +
+      "/settings/screenTime" +
+      "?key=\(kFirestoreApiKey)" +
+      "&updateMask.fieldPaths=lastSilentPushReceivedAt" +
+      "&updateMask.fieldPaths=lastSilentPushMinutes"
+    guard let url = URL(string: urlStr) else { return }
+    let iso = ISO8601DateFormatter().string(from: Date())
+    let body: [String: Any] = [
+      "fields": [
+        "lastSilentPushReceivedAt": ["timestampValue": iso],
+        "lastSilentPushMinutes": ["integerValue": "\(minutes)"],
+      ]
+    ]
+    guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return }
+    var req = URLRequest(url: url)
+    req.httpMethod = "PATCH"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    req.httpBody = bodyData
+    req.timeoutInterval = 15
+    URLSession.shared.dataTask(with: req).resume()
   }
 
   // Screen locked — record timestamp so we can subtract the off-screen duration later.

@@ -73,6 +73,7 @@ class UsageStatsService {
     required int limitMinutes,
     required String dateKey,
     required String familyId,
+    int? sessionStartMillis,
   }) async {
     try {
       if (Platform.isIOS) {
@@ -80,6 +81,7 @@ class UsageStatsService {
           'limitMinutes': limitMinutes,
           'dateKey': dateKey,
           'familyId': familyId,
+          'sessionStartMillis': sessionStartMillis ?? 0,
         }) ?? false;
       }
     } catch (_) {}

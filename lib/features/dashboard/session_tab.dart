@@ -397,7 +397,10 @@ class _SessionTabState extends State<SessionTab> {
         // Android child: start/stop AppBlockerService when session goes active/ends.
         // Use Future.microtask (not addPostFrameCallback) so it fires even when
         // Flutter is backgrounded behind the overlay.
-        if (Platform.isAndroid && widget.role == 'child') {
+        // Gated on snap.hasData for the same reason as the iOS block below —
+        // a fresh subscription's first placeholder build must never be read
+        // as "no active session".
+        if (Platform.isAndroid && widget.role == 'child' && snap.hasData) {
           final newActiveId = activeDoc?.id;
           if (newActiveId != null && _blockingServiceSessionId != newActiveId) {
             _blockingServiceSessionId = newActiveId;
@@ -426,7 +429,18 @@ class _SessionTabState extends State<SessionTab> {
 
         // iOS child: apply ManagedSettings restrictions when session goes active;
         // clear them when the session ends (any terminal status).
-        if (Platform.isIOS && widget.role == 'child') {
+        //
+        // Gated on snap.hasData: a fresh StreamBuilder subscription (e.g. the
+        // app was reopened after being closed mid-session) first builds with
+        // NO data at all — snap.data is null, so activeDoc computes as null
+        // even though a session is genuinely still active and Firestore just
+        // hasn't delivered its first snapshot yet. Without this guard, that
+        // one placeholder frame was read as "no active session" and
+        // immediately cleared the shield, unlocking every blocked app until
+        // the real snapshot arrived a moment later (which only reapplied the
+        // shield if that follow-up actually ran — an unnecessary window of
+        // full access that shouldn't exist at all).
+        if (Platform.isIOS && widget.role == 'child' && snap.hasData) {
           final newActiveId = activeDoc?.id;
           if (newActiveId != null && _appliedRestrictionsForSession != newActiveId) {
             _appliedRestrictionsForSession = newActiveId;
@@ -549,9 +563,7 @@ class _SessionTabState extends State<SessionTab> {
                                     color: _textMid, letterSpacing: 0.5)),
                             const SizedBox(height: 12),
                             ...saved.map((d) => _SavedSessionRow(
-                                  name: d.data()['name'] as String? ?? 'Session',
-                                  durationMinutes: d.data()['durationMinutes'] as int? ?? 0,
-                                  taskCount: (d.data()['tasks'] as List<dynamic>? ?? []).length,
+                                  data: d.data(),
                                   enabled: currentDoc == null,
                                   onRun: () => _runSavedSession(d.data()),
                                   onDelete: () => _deleteSavedSession(d.id),
@@ -673,6 +685,16 @@ class _SessionTabState extends State<SessionTab> {
 
   void _showStartedPopup(BuildContext ctx, Map<String, dynamic> data) {
     final dur     = data['durationMinutes'] as int? ?? 0;
+    // Reopening KTB mid-session re-triggers this popup (the "already shown"
+    // tracker is per-widget-instance and resets on a fresh app launch), so it
+    // must show the actual remaining time from endTime, not the session's
+    // original total duration — otherwise a reopen at 26 minutes left still
+    // announces "30 minutes" as if the session just started.
+    final endTime = (data['endTime'] as Timestamp?)?.toDate();
+    final remaining = endTime != null
+        ? endTime.difference(DateTime.now()).inMinutes.clamp(0, dur)
+        : dur;
+    final isFreshStart = remaining >= dur;
     final allowed = (data['allowedApps'] as List<dynamic>? ?? [])
         .map((a) => (a as Map)['appName'] as String? ?? '').where((s) => s.isNotEmpty).toList();
     final blocked = (data['blockedApps'] as List<dynamic>? ?? [])
@@ -682,15 +704,15 @@ class _SessionTabState extends State<SessionTab> {
       builder: (_) => AlertDialog(
         backgroundColor: Colors.white,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-        title: const Row(children: [
-          Icon(Icons.play_circle_fill_rounded, color: _green, size: 28),
-          SizedBox(width: 10),
-          Text('Session Started!',
-              style: TextStyle(fontFamily: 'PlusJakartaSans',
+        title: Row(children: [
+          const Icon(Icons.play_circle_fill_rounded, color: _green, size: 28),
+          const SizedBox(width: 10),
+          Text(isFreshStart ? 'Session Started!' : 'Session In Progress',
+              style: const TextStyle(fontFamily: 'PlusJakartaSans',
                   fontWeight: FontWeight.w700, color: _textDark, fontSize: 18)),
         ]),
         content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('You have $dur minutes of screen time.',
+          Text('You have $remaining minutes of screen time left.',
               style: const TextStyle(fontFamily: 'PlusJakartaSans', color: _textMid, fontSize: 14)),
           if (allowed.isNotEmpty) ...[
             const SizedBox(height: 12),
@@ -1666,58 +1688,137 @@ class _EmptyCard extends StatelessWidget {
 // Saved (repeatable) session row
 // ═══════════════════════════════════════════════════════════════════════════════
 class _SavedSessionRow extends StatelessWidget {
-  final String name;
-  final int durationMinutes;
-  final int taskCount;
+  final Map<String, dynamic> data;
   final bool enabled;
   final VoidCallback onRun;
   final VoidCallback onDelete;
   const _SavedSessionRow({
-    required this.name, required this.durationMinutes, required this.taskCount,
-    required this.onRun, required this.onDelete, this.enabled = true,
+    required this.data, required this.onRun, required this.onDelete, this.enabled = true,
   });
 
-  @override
-  Widget build(BuildContext context) => Container(
-    margin: const EdgeInsets.only(bottom: 10),
-    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-    decoration: BoxDecoration(
-      color: Colors.white, borderRadius: BorderRadius.circular(16),
-      border: Border.all(color: _border),
-    ),
-    child: Row(children: [
-      const Icon(Icons.star_rounded, color: _purple, size: 20),
-      const SizedBox(width: 10),
-      Expanded(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(name, style: const TextStyle(fontFamily: 'PlusJakartaSans',
-              fontWeight: FontWeight.w600, fontSize: 14, color: _textDark)),
-          Text('$durationMinutes min · ${taskCount == 1 ? '1 task' : '$taskCount tasks'}',
-              style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
-        ]),
-      ),
-      IconButton(
-        onPressed: onDelete,
-        visualDensity: VisualDensity.compact,
-        icon: const Icon(Icons.delete_outline_rounded, color: _textMid, size: 20),
-      ),
-      TextButton(
-        onPressed: enabled
-            ? onRun
-            : () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('End the current session before starting a saved one'),
-                duration: Duration(seconds: 3),
-                behavior: SnackBarBehavior.floating,
-              )),
-        style: TextButton.styleFrom(
-          backgroundColor: enabled ? _purpleLight : const Color(0xFFF0F0F0),
-          foregroundColor: enabled ? _purple : _textMid,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+  void _showDetails(BuildContext context) {
+    final name = data['name'] as String? ?? 'Session';
+    final durationMinutes = data['durationMinutes'] as int? ?? 0;
+    final tasks = data['tasks'] as List<dynamic>? ?? [];
+    final allowed = data['allowedApps'] as List<dynamic>? ?? [];
+    final blocked = data['blockedApps'] as List<dynamic>? ?? [];
+    final iosNative = data['iosNativeSelection'] as bool? ?? false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(name, style: const TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w700)),
+        content: SizedBox(
+          width: 340,
+          child: SingleChildScrollView(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('$durationMinutes minutes',
+                  style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 13, color: _textMid)),
+              const SizedBox(height: 16),
+              if (tasks.isNotEmpty) ...[
+                const Text('Tasks', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                    fontWeight: FontWeight.w600, fontSize: 13, color: _textDark)),
+                const SizedBox(height: 6),
+                ...tasks.map((t) {
+                  final m = t as Map<String, dynamic>;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: Text('• ${m['text']} (${m['durationMinutes'] ?? 0}m)',
+                        style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 13, color: _textDark)),
+                  );
+                }),
+                const SizedBox(height: 14),
+              ],
+              if (iosNative) ...[
+                const Text('App access', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                    fontWeight: FontWeight.w600, fontSize: 13, color: _textDark)),
+                const SizedBox(height: 6),
+                const Text('Apps were selected via the iOS Screen Time picker on the '
+                    'child\'s device — Apple doesn\'t expose those app names here.',
+                    style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12, color: _textMid)),
+              ] else ...[
+                if (allowed.isNotEmpty) ...[
+                  const Text('Allowed apps', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                      fontWeight: FontWeight.w600, fontSize: 13, color: _green)),
+                  const SizedBox(height: 6),
+                  Text(allowed.map((a) => (a as Map)['appName'] ?? '').join(', '),
+                      style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 13, color: _textDark)),
+                  const SizedBox(height: 14),
+                ],
+                if (blocked.isNotEmpty) ...[
+                  const Text('Blocked apps', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                      fontWeight: FontWeight.w600, fontSize: 13, color: Colors.redAccent)),
+                  const SizedBox(height: 6),
+                  Text(blocked.map((a) => (a as Map)['appName'] ?? '').join(', '),
+                      style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 13, color: _textDark)),
+                ],
+              ],
+            ]),
+          ),
         ),
-        child: const Text('Run', style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(), child: const Text('Close')),
+        ],
       ),
-    ]),
-  );
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = data['name'] as String? ?? 'Session';
+    final durationMinutes = data['durationMinutes'] as int? ?? 0;
+    final taskCount = (data['tasks'] as List<dynamic>? ?? []).length;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      decoration: BoxDecoration(
+        color: Colors.white, borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: _border),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: () => _showDetails(context),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(children: [
+              const Icon(Icons.star_rounded, color: _purple, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(name, style: const TextStyle(fontFamily: 'PlusJakartaSans',
+                      fontWeight: FontWeight.w600, fontSize: 14, color: _textDark)),
+                  Text('$durationMinutes min · ${taskCount == 1 ? '1 task' : '$taskCount tasks'}',
+                      style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
+                ]),
+              ),
+              IconButton(
+                onPressed: onDelete,
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.delete_outline_rounded, color: _textMid, size: 20),
+              ),
+              TextButton(
+                onPressed: enabled
+                    ? onRun
+                    : () => ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                        content: Text('End the current session before starting a saved one'),
+                        duration: Duration(seconds: 3),
+                        behavior: SnackBarBehavior.floating,
+                      )),
+                style: TextButton.styleFrom(
+                  backgroundColor: enabled ? _purpleLight : const Color(0xFFF0F0F0),
+                  foregroundColor: enabled ? _purple : _textMid,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                child: const Text('Run', style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600)),
+              ),
+            ]),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════

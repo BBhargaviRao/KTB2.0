@@ -40,6 +40,14 @@ class NotificationService {
       description: 'Screen time limit reminders',
       importance: Importance.high,
     ));
+
+    // Request POST_NOTIFICATIONS (Android 13+) directly through this plugin
+    // rather than relying solely on FirebaseMessaging.requestPermission() in
+    // main.dart — Amazon Fire tablets have no Google Play Services, so FCM's
+    // permission flow can fail/hang silently there, leaving every local
+    // notification (reminders, "screen time is up", nudge banners) scheduled
+    // by AlarmManager but suppressed at the OS level with zero error surfaced.
+    await android?.requestNotificationsPermission();
   }
 
   // Show a banner immediately (used for FCM foreground messages)

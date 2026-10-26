@@ -2,7 +2,7 @@ name: ktb2
 description: Kids Tech Balance 2.0 - family screen time and engagement app
 publish_to: 'none'
 
-version: 1.0.0+2
+version: 1.0.0+3
 
 environment:
   sdk: ^3.6.0
@@ -18,6 +18,7 @@ dependencies:
   firebase_auth: ^5.0.0
   cloud_firestore: ^5.0.0
   firebase_messaging: ^15.0.0
+  cloud_functions: ^5.0.0
 
   # State Management + Routing
   flutter_riverpod: ^2.5.1
@@ -33,6 +34,10 @@ dependencies:
 
   # Icons
   cupertino_icons: ^1.0.8
+  record: ^6.2.1
+  just_audio: ^0.10.6
+  path_provider: ^2.1.5
+  firebase_storage: ^12.4.10
 
 dev_dependencies:
   flutter:

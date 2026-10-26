@@ -27,7 +27,11 @@ android {
         applicationId = "com.ktb.kidstechbalance2"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = 23
+        // Bumped from 23 — the audio_session plugin (pulled in by just_audio,
+        // for playing recorded nudge answers) requires API 24+. Both physical
+        // test devices (Fire tablet API 27, Galaxy S9 API 29) are well above
+        // this, so no device support lost.
+        minSdk = 24
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName

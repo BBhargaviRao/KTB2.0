@@ -1,0 +1,10 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    match /{allPaths=**} {
+      // Matches firestore.rules — this app has no Firebase Auth integration
+      // (family login is custom, code-based), so there's no uid to gate on.
+      allow read, write: if true;
+    }
+  }
+}

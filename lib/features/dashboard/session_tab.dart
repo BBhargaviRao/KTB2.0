@@ -47,10 +47,16 @@ class _AppEntry {
 // SessionTab
 // ═══════════════════════════════════════════════════════════════════════════════
 class SessionTab extends StatefulWidget {
-  final String  familyId;
-  final String  role;
-  final String? childAccountId;
-  final String? childIosVendorId;
+  final String   familyId;
+  final String   role;
+  final String?  childAccountId;
+  final String?  childIosVendorId;
+  final Color?   bgColor;
+  // Day selected in the dashboard's week overview. Defaults to "today" when
+  // not supplied. On a past day this tab switches to a read-only view of
+  // that day's sessions instead of the live start/active/override controls,
+  // which only make sense for the day that's actually happening right now.
+  final DateTime? selectedDate;
 
   const SessionTab({
     super.key,
@@ -58,6 +64,8 @@ class SessionTab extends StatefulWidget {
     required this.role,
     this.childAccountId,
     this.childIosVendorId,
+    this.bgColor,
+    this.selectedDate,
   });
 
   @override
@@ -87,36 +95,62 @@ class _SessionTabState extends State<SessionTab> {
   // Tracks which session the Android blocking service is running for.
   String? _blockingServiceSessionId;
 
+  // Which day this tab is currently querying/showing — kept in sync with
+  // widget.selectedDate via didUpdateWidget, cached (not recomputed inline in
+  // build()) for the same reason every other stream in this file is cached:
+  // recreating the Firestore query on every rebuild tears down and
+  // resubscribes the StreamBuilder, which previously broke text input.
+  late String _viewDateKey;
+
+  // Saved-sessions (favorites) stream — cached the same way as `_stream`
+  // (see class comment) since it now backs a StreamBuilder in the header
+  // badge, and re-subscribing on every rebuild is the anti-pattern this
+  // codebase specifically avoids everywhere else.
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _savedStream;
+
   @override
   void initState() {
     super.initState();
+    _viewDateKey = _dateKeyFor(widget.selectedDate ?? DateTime.now());
     _stream = FirebaseFirestore.instance
         .collection('families')
         .doc(widget.familyId)
         .collection('sessions')
-        .where('dateKey', isEqualTo: _todayKey())
+        .where('dateKey', isEqualTo: _viewDateKey)
         .snapshots();
+    _savedStream = _savedSessions.orderBy('createdAt', descending: true).snapshots();
   }
 
   @override
   void didUpdateWidget(SessionTab old) {
     super.didUpdateWidget(old);
-    if (old.familyId != widget.familyId) {
+    final newKey = _dateKeyFor(widget.selectedDate ?? DateTime.now());
+    if (old.familyId != widget.familyId || _viewDateKey != newKey) {
+      _viewDateKey = newKey;
       setState(() {
         _stream = FirebaseFirestore.instance
             .collection('families')
             .doc(widget.familyId)
             .collection('sessions')
-            .where('dateKey', isEqualTo: _todayKey())
+            .where('dateKey', isEqualTo: _viewDateKey)
             .snapshots();
+        if (old.familyId != widget.familyId) {
+          _savedStream = _savedSessions.orderBy('createdAt', descending: true).snapshots();
+        }
       });
     }
   }
 
-  String _todayKey() {
-    final n = DateTime.now();
-    return '${n.year}-${n.month.toString().padLeft(2, '0')}-${n.day.toString().padLeft(2, '0')}';
-  }
+  String _dateKeyFor(DateTime d) =>
+      '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
+  String _todayKey() => _dateKeyFor(DateTime.now());
+
+  bool get _isToday => _viewDateKey == _todayKey();
+
+  static const _monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  String _dateLabel(DateTime d) => '${_monthNames[d.month - 1]} ${d.day}';
 
   FirebaseFirestore get _db => FirebaseFirestore.instance;
   CollectionReference<Map<String, dynamic>> get _sessions =>
@@ -216,6 +250,12 @@ class _SessionTabState extends State<SessionTab> {
         .set({
           'activeSessionId':          null,
           'activeSessionStartMillis': null,
+          // screenTimeLimitMinutes is per-session (equal to that session's
+          // duration) — clearing it here (in addition to the server-side
+          // reset in notifyOnSessionEnded) stops it from lingering true after
+          // the session ends, which previously kept the dashboard's progress
+          // bar and the reminder-scheduling math reading a stale limit.
+          'screenTimeLimitMinutes':   null,
         }, SetOptions(merge: true));
   }
 
@@ -244,6 +284,7 @@ class _SessionTabState extends State<SessionTab> {
           .set({
             'activeSessionId':          null,
             'activeSessionStartMillis': null,
+            'screenTimeLimitMinutes':   null,
           }, SetOptions(merge: true));
     } else {
       await _sessions.doc(sessionId).update({
@@ -344,6 +385,96 @@ class _SessionTabState extends State<SessionTab> {
     await _savedSessions.doc(id).delete();
   }
 
+  // ── parent: edit a favorite's tasks/duration in place ──────────────────────
+  // The apps list on a saved session is intentionally left alone here — the
+  // whole point of a favorite is "same blocked-apps list, different tasks",
+  // so only tasks + overall duration are editable.
+  Future<void> _editSavedSession(String id, Map<String, dynamic> data) async {
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      builder: (_) => _EditSavedSessionDialog(data: data),
+    );
+    if (result == null) return;
+    await _savedSessions.doc(id).update(result);
+  }
+
+  // ── favorites bottom sheet, opened from the header star badge ─────────────
+  void _showFavoritesSheet(BuildContext context, {required bool canRun}) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetCtx) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        minChildSize: 0.3,
+        maxChildSize: 0.9,
+        expand: false,
+        builder: (_, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          // A fresh .snapshots() call here (not the shared _savedStream used
+          // by the header badge) — Firestore snapshot streams are broadcast
+          // streams that do NOT replay past events to a late-joining
+          // listener. Sharing the badge's already-subscribed stream meant
+          // this sheet, opening after the badge had already consumed the
+          // current snapshot, only ever saw *future* writes and sat empty
+          // forever even when favorites genuinely existed.
+          child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            stream: _savedSessions.orderBy('createdAt', descending: true).snapshots(),
+            builder: (_, savedSnap) {
+              final docs = savedSnap.data?.docs ?? [];
+              return Column(children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+                  child: Row(children: [
+                    const Icon(Icons.star_rounded, color: _purple, size: 20),
+                    const SizedBox(width: 8),
+                    const Expanded(child: Text('Favorite Sessions',
+                        style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w700,
+                            fontSize: 17, color: _textDark))),
+                    IconButton(icon: const Icon(Icons.close, color: _textMid),
+                        onPressed: () => Navigator.pop(sheetCtx)),
+                  ]),
+                ),
+                const Divider(height: 1, color: _border),
+                Expanded(
+                  child: docs.isEmpty
+                      ? const Center(
+                          child: Padding(
+                            padding: EdgeInsets.all(32),
+                            child: Text(
+                                'No favorite sessions yet.\nTap the star on any session to save it here.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontFamily: 'PlusJakartaSans',
+                                    color: _textMid, fontSize: 13)),
+                          ),
+                        )
+                      : ListView.builder(
+                          controller: scrollController,
+                          padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                          itemCount: docs.length,
+                          itemBuilder: (_, i) => _SavedSessionRow(
+                            data: docs[i].data(),
+                            enabled: canRun,
+                            onRun: () {
+                              Navigator.pop(sheetCtx);
+                              _runSavedSession(docs[i].data());
+                            },
+                            onDelete: () => _deleteSavedSession(docs[i].id),
+                            onEdit: () => _editSavedSession(docs[i].id, docs[i].data()),
+                          ),
+                        ),
+                ),
+              ]);
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
@@ -351,7 +482,7 @@ class _SessionTabState extends State<SessionTab> {
       builder: (ctx, snap) {
         if (snap.hasError) {
           return Scaffold(
-            backgroundColor: _bg,
+            backgroundColor: widget.bgColor ?? _bg,
             body: Center(
               child: Padding(
                 padding: const EdgeInsets.all(32),
@@ -382,7 +513,7 @@ class _SessionTabState extends State<SessionTab> {
         final pastDocs    = docs.where((d) => ['completed', 'completed_override'].contains(d.data()['status'])).toList();
 
         // Show "session started" popup on child's device once per session
-        if (widget.role == 'child' && activeDoc != null &&
+        if (_isToday && widget.role == 'child' && activeDoc != null &&
             _shownPopupForSessionId != activeDoc.id) {
           _shownPopupForSessionId = activeDoc.id;
           WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -400,7 +531,7 @@ class _SessionTabState extends State<SessionTab> {
         // Gated on snap.hasData for the same reason as the iOS block below —
         // a fresh subscription's first placeholder build must never be read
         // as "no active session".
-        if (Platform.isAndroid && widget.role == 'child' && snap.hasData) {
+        if (_isToday && Platform.isAndroid && widget.role == 'child' && snap.hasData) {
           final newActiveId = activeDoc?.id;
           if (newActiveId != null && _blockingServiceSessionId != newActiveId) {
             _blockingServiceSessionId = newActiveId;
@@ -440,7 +571,7 @@ class _SessionTabState extends State<SessionTab> {
         // the real snapshot arrived a moment later (which only reapplied the
         // shield if that follow-up actually ran — an unnecessary window of
         // full access that shouldn't exist at all).
-        if (Platform.isIOS && widget.role == 'child' && snap.hasData) {
+        if (_isToday && Platform.isIOS && widget.role == 'child' && snap.hasData) {
           final newActiveId = activeDoc?.id;
           if (newActiveId != null && _appliedRestrictionsForSession != newActiveId) {
             _appliedRestrictionsForSession = newActiveId;
@@ -458,131 +589,144 @@ class _SessionTabState extends State<SessionTab> {
         }
 
         return Scaffold(
-          backgroundColor: _bg,
+          backgroundColor: widget.bgColor ?? _bg,
           body: SafeArea(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 28, 20, 40),
               children: [
-                const Text('Sessions',
-                    style: TextStyle(fontFamily: 'InstrumentSerif',
-                        fontSize: 36, color: _textDark, height: 1.1)),
-                const SizedBox(height: 4),
-                const Text("Today's screen time sessions",
-                    style: TextStyle(fontFamily: 'PlusJakartaSans',
-                        fontSize: 14, color: _textMid)),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Sessions',
+                              style: TextStyle(fontFamily: 'InstrumentSerif',
+                                  fontSize: 36, color: _textDark, height: 1.1)),
+                          const SizedBox(height: 4),
+                          Text(
+                            _isToday
+                                ? "Today's screen time sessions"
+                                : 'Sessions on ${_dateLabel(widget.selectedDate!)}',
+                            style: const TextStyle(fontFamily: 'PlusJakartaSans',
+                                fontSize: 14, color: _textMid),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (widget.role == 'parent')
+                      _FavoritesBadge(
+                        stream: _savedStream,
+                        onTap: () => _showFavoritesSheet(
+                            context, canRun: _isToday && currentDoc == null),
+                      ),
+                  ],
+                ),
                 const SizedBox(height: 28),
 
-                // ── main card (status-dependent) ──────────────────────────
-                if (overrideDoc != null)
-                  _buildOverrideCard(overrideDoc)
-                else if (activeDoc != null)
-                  _ActiveCard(
-                    doc: activeDoc, role: widget.role,
-                    familyId: widget.familyId,
-                    onEnd: () => _endSession(activeDoc.id),
-                    onRequestOverride: () => _requestOverride(activeDoc.id),
-                    onSaveTemplate: widget.role == 'parent'
-                        ? () => _saveAsTemplate(activeDoc.data())
-                        : null,
-                  )
-                else if (widget.role == 'parent' && appsReadyDoc != null)
-                  _AppsReadyCard(
-                    doc: appsReadyDoc,
-                    onStart: () => _startSession(
-                      appsReadyDoc.id,
-                      appsReadyDoc.data()['durationMinutes'] as int? ?? 30,
-                      appsReadyDoc.data()['tasks'] as List<dynamic>? ?? [],
-                    ),
-                    onCancel: () => _cancelPending(appsReadyDoc.id),
-                  )
-                else if (widget.role == 'child' && (appsReadyDoc != null))
-                  _ChildWaitingCard(message: 'Waiting for parent to start the session…')
-                else if (widget.role == 'child' && pendingDoc != null)
-                  _ChildAppPickerCard(
-                    doc: pendingDoc,
-                    familyId: widget.familyId,
-                    childIosVendorId: widget.childIosVendorId,
-                    onConfirm: (apps) => _confirmApps(pendingDoc.id, apps),
-                    onConfirmIos: () => _confirmAppsIos(pendingDoc.id),
-                  )
-                else if (widget.role == 'parent' && pendingDoc != null)
-                  _ParentWaitingCard(
-                    doc: pendingDoc,
-                    onCancel: () => _cancelPending(pendingDoc.id),
-                  )
-                else
-                  _EmptyCard(role: widget.role),
-
-                const SizedBox(height: 14),
-
-                // ── start button (parent, no current session) ─────────────
-                if (widget.role == 'parent' && currentDoc == null)
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: _purple, foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        elevation: 0,
+                if (!_isToday) ...[
+                  // ── read-only past-day view ───────────────────────────────
+                  // Live controls (start/end, override, app picker) only make
+                  // sense for the day that's actually happening — a past day
+                  // just shows what happened, reusing the same expandable
+                  // _PastCard used for "Earlier Today" regardless of status.
+                  if (docs.isEmpty)
+                    _EmptyCard(role: widget.role)
+                  else
+                    ...docs.map((d) => _PastCard(
+                          doc: d,
+                          role: widget.role,
+                          onSaveTemplate: widget.role == 'parent'
+                              ? (data) => _saveAsTemplate(data)
+                              : null,
+                        )),
+                ] else ...[
+                  // ── main card (status-dependent) ──────────────────────────
+                  if (overrideDoc != null)
+                    _buildOverrideCard(overrideDoc)
+                  else if (activeDoc != null)
+                    _ActiveCard(
+                      doc: activeDoc, role: widget.role,
+                      familyId: widget.familyId,
+                      onEnd: () => _endSession(activeDoc.id),
+                      onRequestOverride: () => _requestOverride(activeDoc.id),
+                      onSaveTemplate: widget.role == 'parent'
+                          ? () => _saveAsTemplate(activeDoc.data())
+                          : null,
+                    )
+                  else if (widget.role == 'parent' && appsReadyDoc != null)
+                    _AppsReadyCard(
+                      doc: appsReadyDoc,
+                      onStart: () => _startSession(
+                        appsReadyDoc.id,
+                        appsReadyDoc.data()['durationMinutes'] as int? ?? 30,
+                        appsReadyDoc.data()['tasks'] as List<dynamic>? ?? [],
                       ),
-                      onPressed: () => showDialog(
-                        context: context,
-                        barrierDismissible: false,
-                        builder: (_) => _SessionCreatorDialog(
-                          onPendingCreated: (dur, tasks) => _writePendingSession(
-                            durationMinutes: dur, tasks: tasks),
+                      onCancel: () => _cancelPending(appsReadyDoc.id),
+                    )
+                  else if (widget.role == 'child' && (appsReadyDoc != null))
+                    _ChildWaitingCard(message: 'Waiting for parent to start the session…')
+                  else if (widget.role == 'child' && pendingDoc != null)
+                    _ChildAppPickerCard(
+                      doc: pendingDoc,
+                      familyId: widget.familyId,
+                      childIosVendorId: widget.childIosVendorId,
+                      onConfirm: (apps) => _confirmApps(pendingDoc.id, apps),
+                      onConfirmIos: () => _confirmAppsIos(pendingDoc.id),
+                    )
+                  else if (widget.role == 'parent' && pendingDoc != null)
+                    _ParentWaitingCard(
+                      doc: pendingDoc,
+                      onCancel: () => _cancelPending(pendingDoc.id),
+                    )
+                  else
+                    _EmptyCard(role: widget.role),
+
+                  const SizedBox(height: 14),
+
+                  // ── start button (parent, no current session) ─────────────
+                  if (widget.role == 'parent' && currentDoc == null)
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: _purple, foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          elevation: 0,
                         ),
+                        onPressed: () => showDialog(
+                          context: context,
+                          barrierDismissible: false,
+                          builder: (_) => _SessionCreatorDialog(
+                            onPendingCreated: (dur, tasks) => _writePendingSession(
+                              durationMinutes: dur, tasks: tasks),
+                          ),
+                        ),
+                        icon: const Icon(Icons.play_arrow_rounded),
+                        label: const Text('Start New Session',
+                            style: TextStyle(fontFamily: 'PlusJakartaSans',
+                                fontWeight: FontWeight.w600, fontSize: 15)),
                       ),
-                      icon: const Icon(Icons.play_arrow_rounded),
-                      label: const Text('Start New Session',
-                          style: TextStyle(fontFamily: 'PlusJakartaSans',
-                              fontWeight: FontWeight.w600, fontSize: 15)),
                     ),
-                  ),
 
-                // ── saved sessions (parent) — always visible, independent of
-                // whether a session is currently active, so "where did my
-                // saved session go" isn't a question: it lives here permanently
-                // until explicitly deleted from this list (deleting only
-                // removes it from here, not from that day's session history).
-                if (widget.role == 'parent')
-                  StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                    stream: _savedSessions.orderBy('createdAt', descending: true).snapshots(),
-                    builder: (ctx, savedSnap) {
-                      final saved = savedSnap.data?.docs ?? [];
-                      if (saved.isEmpty) return const SizedBox.shrink();
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 20),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('Saved Sessions',
-                                style: TextStyle(fontFamily: 'PlusJakartaSans',
-                                    fontWeight: FontWeight.w600, fontSize: 13,
-                                    color: _textMid, letterSpacing: 0.5)),
-                            const SizedBox(height: 12),
-                            ...saved.map((d) => _SavedSessionRow(
-                                  data: d.data(),
-                                  enabled: currentDoc == null,
-                                  onRun: () => _runSavedSession(d.data()),
-                                  onDelete: () => _deleteSavedSession(d.id),
-                                )),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-
-                // ── past sessions ─────────────────────────────────────────
-                if (pastDocs.isNotEmpty) ...[
-                  const SizedBox(height: 32),
-                  const Text('Earlier Today',
-                      style: TextStyle(fontFamily: 'PlusJakartaSans',
-                          fontWeight: FontWeight.w600, fontSize: 13,
-                          color: _textMid, letterSpacing: 0.5)),
-                  const SizedBox(height: 12),
-                  ...pastDocs.map((d) => _PastCard(doc: d)),
+                  // ── past sessions ─────────────────────────────────────────
+                  if (pastDocs.isNotEmpty) ...[
+                    const SizedBox(height: 32),
+                    const Text('Earlier Today',
+                        style: TextStyle(fontFamily: 'PlusJakartaSans',
+                            fontWeight: FontWeight.w600, fontSize: 13,
+                            color: _textMid, letterSpacing: 0.5)),
+                    const SizedBox(height: 12),
+                    ...pastDocs.map((d) => _PastCard(
+                          doc: d,
+                          role: widget.role,
+                          onSaveTemplate: widget.role == 'parent'
+                              ? (data) => _saveAsTemplate(data)
+                              : null,
+                        )),
+                  ],
                 ],
 
                 if (snap.connectionState == ConnectionState.waiting && docs.isEmpty)
@@ -1692,8 +1836,10 @@ class _SavedSessionRow extends StatelessWidget {
   final bool enabled;
   final VoidCallback onRun;
   final VoidCallback onDelete;
+  final VoidCallback? onEdit;
   const _SavedSessionRow({
     required this.data, required this.onRun, required this.onDelete, this.enabled = true,
+    this.onEdit,
   });
 
   void _showDetails(BuildContext context) {
@@ -1793,6 +1939,12 @@ class _SavedSessionRow extends StatelessWidget {
                       style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, color: _textMid)),
                 ]),
               ),
+              if (onEdit != null)
+                IconButton(
+                  onPressed: onEdit,
+                  visualDensity: VisualDensity.compact,
+                  icon: const Icon(Icons.edit_outlined, color: _textMid, size: 20),
+                ),
               IconButton(
                 onPressed: onDelete,
                 visualDensity: VisualDensity.compact,
@@ -1822,11 +1974,266 @@ class _SavedSessionRow extends StatelessWidget {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Favorites badge — top-corner star bubble that opens the favorites sheet
+// ═══════════════════════════════════════════════════════════════════════════════
+class _FavoritesBadge extends StatelessWidget {
+  final Stream<QuerySnapshot<Map<String, dynamic>>> stream;
+  final VoidCallback onTap;
+  const _FavoritesBadge({required this.stream, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: stream,
+      builder: (context, snap) {
+        final count = snap.data?.docs.length ?? 0;
+        return GestureDetector(
+          onTap: onTap,
+          child: Container(
+            width: 44, height: 44,
+            margin: const EdgeInsets.only(top: 2),
+            decoration: BoxDecoration(
+              color: Colors.white, shape: BoxShape.circle,
+              border: Border.all(color: _border),
+              boxShadow: [BoxShadow(color: _purple.withValues(alpha: 0.10),
+                  blurRadius: 12, offset: const Offset(0, 4))],
+            ),
+            child: Stack(clipBehavior: Clip.none, children: [
+              const Center(child: Icon(Icons.star_rounded, color: _purple, size: 22)),
+              if (count > 0)
+                Positioned(
+                  right: -2, top: -2,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    constraints: const BoxConstraints(minWidth: 16),
+                    decoration: BoxDecoration(color: _purple, borderRadius: BorderRadius.circular(8)),
+                    child: Text('$count', textAlign: TextAlign.center,
+                        style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 9,
+                            fontWeight: FontWeight.w700, color: Colors.white)),
+                  ),
+                ),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Edit a favorite's tasks + duration — apps list is left untouched, so this
+// is how a parent reuses the same blocked/allowed-apps list with a fresh set
+// of tasks instead of recreating the whole session from scratch.
+// ═══════════════════════════════════════════════════════════════════════════════
+class _EditSavedSessionDialog extends StatefulWidget {
+  final Map<String, dynamic> data;
+  const _EditSavedSessionDialog({required this.data});
+
+  @override
+  State<_EditSavedSessionDialog> createState() => _EditSavedSessionDialogState();
+}
+
+class _EditSavedSessionDialogState extends State<_EditSavedSessionDialog> {
+  late int _duration;
+  late List<_STask> _tasks;
+  final _ctrl  = TextEditingController();
+  final _focus = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _duration = (widget.data['durationMinutes'] as int? ?? 30).clamp(15, 120);
+    _tasks = (widget.data['tasks'] as List<dynamic>? ?? []).map((t) {
+      final m = t as Map<String, dynamic>;
+      return _STask(
+        text: m['text'] as String? ?? '',
+        durationMinutes: m['durationMinutes'] as int? ?? 10,
+      );
+    }).toList();
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); _focus.dispose(); super.dispose(); }
+
+  void _addTask() {
+    final t = _ctrl.text.trim();
+    if (t.isEmpty) return;
+    setState(() { _tasks.add(_STask(text: t)); _ctrl.clear(); });
+    _focus.requestFocus();
+  }
+
+  void _save() {
+    Navigator.pop(context, {
+      'durationMinutes': _duration,
+      'tasks': _tasks.map((t) => {'text': t.text, 'durationMinutes': t.durationMinutes}).toList(),
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final taskTotalMins = _tasks.fold(0, (s, t) => s + t.durationMinutes);
+    final name = widget.data['name'] as String? ?? 'Session';
+    return Dialog(
+      backgroundColor: Colors.white,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 40),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisSize: MainAxisSize.min, children: [
+          Row(children: [
+            Expanded(child: Text('Edit "$name"',
+                style: const TextStyle(fontFamily: 'InstrumentSerif', fontSize: 24, color: _textDark))),
+            IconButton(icon: const Icon(Icons.close, color: _textMid),
+                onPressed: () => Navigator.pop(context)),
+          ]),
+          const SizedBox(height: 2),
+          const Text('The saved app list stays the same — only tasks and duration change.',
+              style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12, color: _textMid)),
+          const SizedBox(height: 22),
+
+          // Duration
+          const Text('Duration',
+              style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
+                  fontSize: 14, color: _textDark)),
+          SliderTheme(
+            data: SliderThemeData(
+              activeTrackColor: _purple,
+              inactiveTrackColor: _purpleLight,
+              thumbColor: _purple,
+              overlayColor: _purple.withValues(alpha: 0.15),
+            ),
+            child: Slider(
+              value: _duration.toDouble(),
+              min: 15,
+              max: 120,
+              divisions: 7,
+              onChanged: (v) => setState(() => _duration = v.round()),
+            ),
+          ),
+          Center(child: Text('$_duration min',
+              style: const TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
+                  color: _purple, fontSize: 13))),
+          const SizedBox(height: 14),
+
+          // Tasks header
+          Row(children: [
+            const Expanded(child: Text('Tasks',
+                style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
+                    fontSize: 14, color: _textDark))),
+            Text('$taskTotalMins / $_duration min',
+                style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12,
+                    color: taskTotalMins > _duration ? Colors.red : _textMid)),
+          ]),
+          const SizedBox(height: 10),
+
+          if (_tasks.isNotEmpty)
+            ..._tasks.asMap().entries.map((e) {
+              final i = e.key; final t = e.value;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(color: _purpleLight, borderRadius: BorderRadius.circular(12)),
+                child: Row(children: [
+                  Expanded(
+                    child: TextFormField(
+                      initialValue: t.text,
+                      style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 14, color: _textDark),
+                      decoration: const InputDecoration(border: InputBorder.none, isDense: true),
+                      onChanged: (v) => t.text = v,
+                    ),
+                  ),
+                  GestureDetector(onTap: () => setState(() { if (t.durationMinutes > 5) t.durationMinutes -= 5; }),
+                      child: const Icon(Icons.remove_circle_outline, color: _purple, size: 20)),
+                  Padding(padding: const EdgeInsets.symmetric(horizontal: 6),
+                    child: Text('${t.durationMinutes}m',
+                        style: const TextStyle(fontFamily: 'PlusJakartaSans',
+                            fontWeight: FontWeight.w600, color: _purple, fontSize: 13))),
+                  GestureDetector(onTap: () => setState(() => t.durationMinutes += 5),
+                      child: const Icon(Icons.add_circle_outline, color: _purple, size: 20)),
+                  const SizedBox(width: 6),
+                  GestureDetector(onTap: () => setState(() => _tasks.removeAt(i)),
+                      child: const Icon(Icons.close, color: _textMid, size: 18)),
+                ]),
+              );
+            }),
+
+          // Add-task row
+          const SizedBox(height: 8),
+          Row(children: [
+            Expanded(
+              child: TextField(
+                controller: _ctrl, focusNode: _focus,
+                style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 14, color: _textDark),
+                decoration: InputDecoration(
+                  hintText: 'Add a task…',
+                  hintStyle: const TextStyle(color: _textMid, fontFamily: 'PlusJakartaSans'),
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: _border)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: _border)),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
+                      borderSide: const BorderSide(color: _purple, width: 1.5)),
+                  filled: true, fillColor: Colors.white,
+                ),
+                onSubmitted: (_) => _addTask(),
+              ),
+            ),
+            const SizedBox(width: 8),
+            GestureDetector(
+              onTap: _addTask,
+              child: Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(color: _purple, borderRadius: BorderRadius.circular(12)),
+                child: const Icon(Icons.add, color: Colors.white),
+              ),
+            ),
+          ]),
+          const SizedBox(height: 28),
+
+          // Actions
+          Row(children: [
+            Expanded(
+              child: OutlinedButton(
+                style: OutlinedButton.styleFrom(
+                  side: const BorderSide(color: _border),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onPressed: () => Navigator.pop(context),
+                child: const Text('Cancel', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                    color: _textMid, fontWeight: FontWeight.w500)),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 2,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: _purple, foregroundColor: Colors.white, elevation: 0,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                ),
+                onPressed: _save,
+                child: const Text('Save Changes',
+                    style: TextStyle(fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600, fontSize: 14)),
+              ),
+            ),
+          ]),
+        ]),
+      ),
+    );
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Past session card (expandable)
 // ═══════════════════════════════════════════════════════════════════════════════
 class _PastCard extends StatefulWidget {
   final QueryDocumentSnapshot<Map<String, dynamic>> doc;
-  const _PastCard({required this.doc});
+  final String role;
+  final void Function(Map<String, dynamic> data)? onSaveTemplate;
+  const _PastCard({required this.doc, required this.role, this.onSaveTemplate});
 
   @override
   State<_PastCard> createState() => _PastCardState();
@@ -1846,6 +2253,7 @@ class _PastCardState extends State<_PastCard> {
     final tasks    = data['tasks']       as List<dynamic>? ?? [];
     final allowed  = data['allowedApps'] as List<dynamic>? ?? [];
     final blocked  = data['blockedApps'] as List<dynamic>? ?? [];
+    final iosNative   = data['iosNativeSelection'] as bool? ?? false;
     final isOverride = status == 'completed_override';
 
     return GestureDetector(
@@ -1879,6 +2287,16 @@ class _PastCardState extends State<_PastCard> {
                   style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12,
                       color: isOverride ? Colors.orange : _textMid)),
             ])),
+            if (widget.role == 'parent' && widget.onSaveTemplate != null)
+              IconButton(
+                onPressed: () => widget.onSaveTemplate!(data),
+                tooltip: 'Save as favorite',
+                visualDensity: VisualDensity.compact,
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                icon: const Icon(Icons.star_border_rounded, color: _purple, size: 18),
+              ),
+            const SizedBox(width: 4),
             Icon(_expanded ? Icons.expand_less : Icons.expand_more, color: _textMid, size: 20),
           ]),
 
@@ -1908,7 +2326,21 @@ class _PastCardState extends State<_PastCard> {
               const SizedBox(height: 10),
             ],
 
-            if (allowed.isNotEmpty || blocked.isNotEmpty) ...[
+            // iOS sessions never populate allowedApps/blockedApps in Firestore
+            // — Apple's FamilyActivityPicker/ApplicationToken never exposes app
+            // names outside the picker's own UI, so there's no app list to show,
+            // only an acknowledgement that a native selection was made. See the
+            // matching explanation in _ActiveCard for why this can't be fixed.
+            if (iosNative) ...[
+              const Text('APP ACCESS', style: TextStyle(fontFamily: 'PlusJakartaSans',
+                  fontWeight: FontWeight.w600, fontSize: 11, color: _textMid, letterSpacing: 0.8)),
+              const SizedBox(height: 8),
+              const Text(
+                  "Apps were selected via iOS Screen Time. Apple doesn't allow "
+                  'app names to be shown outside the picker — everything not '
+                  'selected was blocked for this session.',
+                  style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12, color: _textMid)),
+            ] else if (allowed.isNotEmpty || blocked.isNotEmpty) ...[
               const Text('APP ACCESS', style: TextStyle(fontFamily: 'PlusJakartaSans',
                   fontWeight: FontWeight.w600, fontSize: 11, color: _textMid, letterSpacing: 0.8)),
               const SizedBox(height: 8),

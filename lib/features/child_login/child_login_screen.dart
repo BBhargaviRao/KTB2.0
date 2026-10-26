@@ -1,16 +1,22 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:ktb2/services/audio_upload_service.dart';
+import 'package:ktb2/widgets/audio_recorder_field.dart';
+import 'package:ktb2/widgets/audio_play_button.dart';
 
 class ChildLoginScreen extends StatefulWidget {
   final String childName;
   final String familyId;
   final String childAccountId;
+  final Color? themeColor;
 
   const ChildLoginScreen({
     super.key,
     required this.childName,
     required this.familyId,
     required this.childAccountId,
+    this.themeColor,
   });
 
   @override
@@ -20,6 +26,20 @@ class ChildLoginScreen extends StatefulWidget {
 class _ChildLoginScreenState extends State<ChildLoginScreen> {
   final Map<String, TextEditingController> _controllers = {};
   final Map<String, bool> _shareWithParent = {};
+
+  // Streams are created ONCE (lazily, on first read) rather than fresh
+  // inline on every build (as `stream: _pendingChildNudgesStream()` used to
+  // be). _pendingChildNudgesStream() bounds its query with Timestamp.now(),
+  // so calling it fresh on every rebuild produced a genuinely NEW query each
+  // time — and ANY rebuild of this screen (e.g. the keyboard opening, which
+  // changes MediaQuery viewInsets) made StreamBuilder tear down and
+  // resubscribe, destroying the answer TextField's focus/keyboard the
+  // instant it tried to appear. Same fix already applied to the parent's
+  // equivalent Nudges tab and session_tab.dart's _stream, for the same reason.
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _pendingChildNudgesStreamCached =
+      _pendingChildNudgesStream();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _answeredChildNudgesStreamCached =
+      _answeredChildNudgesStream();
 
   Future<void> _markNudgeOpened(String familyId, String nudgeId) async {
     final nudgeRef = FirebaseFirestore.instance
@@ -289,6 +309,19 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     return null;
   }
 
+  // Sibling of _extractResponseText for a voice-recorded answer — returns
+  // null unless response.type == 'audio' and a URL is actually present.
+  ({String url, int? durationSeconds})? _extractResponseAudio(Map<String, dynamic> data) {
+    final resp = data['response'];
+    if (resp is Map && resp['type'] == 'audio') {
+      final url = resp['audioUrl'];
+      if (url is String && url.isNotEmpty) {
+        return (url: url, durationSeconds: (resp['audioDurationSeconds'] as num?)?.toInt());
+      }
+    }
+    return null;
+  }
+
   Widget _buildChildPendingNudgeCardFromDoc(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -300,20 +333,26 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     });
 
     final prompt = (data['prompt'] ?? '') as String;
+    final dateKey = (data['dateKey'] as String?) ?? '';
 
     final ctrl = _controllers.putIfAbsent(doc.id, () => TextEditingController());
     final currentShareValue = _shareWithParent.putIfAbsent(doc.id, () => true);
 
     return _ChildNudgeCard(
+      key: ValueKey(doc.id),
       question: prompt,
       controller: ctrl,
       shareWithParent: currentShareValue,
+      familyId: widget.familyId,
+      accountId: widget.childAccountId,
+      nudgeId: nudgeId,
+      dateKey: dateKey,
       onShareChanged: (v) {
         setState(() => _shareWithParent[doc.id] = v);
       },
-      onSave: () async {
-        final answer = ctrl.text.trim();
-        if (answer.isEmpty) return;
+      onSave: ({String? text, String? audioLocalPath, int? audioDurationSeconds}) async {
+        final answer = text?.trim() ?? '';
+        if (answer.isEmpty && audioLocalPath == null) return;
 
         final share = _shareWithParent[doc.id] ?? true;
 
@@ -330,10 +369,26 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
           }
         }
 
+        Map<String, dynamic> response;
+        if (audioLocalPath != null) {
+          final url = await AudioUploadService.uploadNudgeAnswer(
+            familyId: widget.familyId,
+            nudgeId: nudgeId,
+            localFilePath: audioLocalPath,
+          );
+          response = {
+            'type': 'audio',
+            'audioUrl': url,
+            'audioDurationSeconds': audioDurationSeconds ?? 0,
+          };
+        } else {
+          response = {'type': 'text', 'text': answer};
+        }
+
         await doc.reference.update({
           'status': 'answered',
           'shareWithParent': share,
-          'response': {'text': answer},
+          'response': response,
           'answeredAt': FieldValue.serverTimestamp(),
           'responseLatencySeconds': responseLatencySeconds,
         });
@@ -353,6 +408,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     final prompt = (data['prompt'] ?? '') as String;
     final createdLabel = _labelFromScheduledFor(data);
     final answerText = _extractResponseText(data);
+    final answerAudio = _extractResponseAudio(data);
     final shareWithParent = data['shareWithParent'] == true;
 
     final privacyLine = shareWithParent ? 'Shared with parent ✅' : 'Not shared';
@@ -363,6 +419,8 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
       headerLine: 'Answered ✅',
       privacyLine: privacyLine,
       answerText: answerText,
+      audioUrl: answerAudio?.url,
+      audioDurationSeconds: answerAudio?.durationSeconds,
     );
   }
 
@@ -371,22 +429,35 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
     final showPending = _showUnanswered;
     final showAnswered = _showAnswered;
 
+    final themeColor = widget.themeColor;
     return Scaffold(
       body: Container(
         width: double.infinity,
         height: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              Color(0xFFEFE9FF),
-              Color(0xFFF4D7C8),
-              Color(0xFFBFA9FF),
-              Color(0xFFF0D4C7),
-            ],
-            stops: [0.0, 0.38, 0.75, 1.0],
-          ),
+        decoration: BoxDecoration(
+          gradient: themeColor == null
+              ? const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFFEFE9FF),
+                    Color(0xFFF4D7C8),
+                    Color(0xFFBFA9FF),
+                    Color(0xFFF0D4C7),
+                  ],
+                  stops: [0.0, 0.38, 0.75, 1.0],
+                )
+              : LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color.alphaBlend(themeColor.withOpacity(0.22), Colors.white),
+                    Color.alphaBlend(themeColor.withOpacity(0.45), Colors.white),
+                    Color.alphaBlend(themeColor.withOpacity(0.30), Colors.white),
+                    Color.alphaBlend(themeColor.withOpacity(0.50), Colors.white),
+                  ],
+                  stops: const [0.0, 0.38, 0.75, 1.0],
+                ),
         ),
         child: SafeArea(
           child: CustomScrollView(
@@ -426,7 +497,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
 
                       if (showPending && !showAnswered) {
                         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                          stream: _pendingChildNudgesStream(),
+                          stream: _pendingChildNudgesStreamCached,
                           builder: (context, snapshot) {
                             if (snapshot.hasError) {
                               return Text('Error: ${snapshot.error}');
@@ -466,7 +537,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
 
                       if (!showPending && showAnswered) {
                         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                          stream: _answeredChildNudgesStream(),
+                          stream: _answeredChildNudgesStreamCached,
                           builder: (context, snapshot) {
                             if (snapshot.hasError) {
                               return Text('Error: ${snapshot.error}');
@@ -505,7 +576,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                       }
 
                       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream: _pendingChildNudgesStream(),
+                        stream: _pendingChildNudgesStreamCached,
                         builder: (context, pendingSnap) {
                           if (pendingSnap.hasError) {
                             return Text('Error: ${pendingSnap.error}');
@@ -521,7 +592,7 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
                           }
 
                           return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                            stream: _answeredChildNudgesStream(),
+                            stream: _answeredChildNudgesStreamCached,
                             builder: (context, answeredSnap) {
                               if (answeredSnap.hasError) {
                                 return Text('Error: ${answeredSnap.error}');
@@ -589,20 +660,93 @@ class _ChildLoginScreenState extends State<ChildLoginScreen> {
   }
 }
 
-class _ChildNudgeCard extends StatelessWidget {
+class _ChildNudgeCard extends StatefulWidget {
   final String question;
   final TextEditingController controller;
   final bool shareWithParent;
   final ValueChanged<bool> onShareChanged;
-  final VoidCallback onSave;
+  final Future<void> Function({String? text, String? audioLocalPath, int? audioDurationSeconds}) onSave;
+  final String familyId;
+  final String accountId;
+  final String nudgeId;
+  final String dateKey;
 
   const _ChildNudgeCard({
+    super.key,
     required this.question,
     required this.controller,
     required this.shareWithParent,
     required this.onShareChanged,
     required this.onSave,
+    required this.familyId,
+    required this.accountId,
+    required this.nudgeId,
+    required this.dateKey,
   });
+
+  @override
+  State<_ChildNudgeCard> createState() => _ChildNudgeCardState();
+}
+
+class _ChildNudgeCardState extends State<_ChildNudgeCard> {
+  static const int _maxChangesPerDay = 3;
+  bool _changing = false;
+  bool _saving = false;
+  String? _audioLocalPath;
+  int? _audioDurationSeconds;
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await widget.onSave(
+        text: widget.controller.text,
+        audioLocalPath: _audioLocalPath,
+        audioDurationSeconds: _audioDurationSeconds,
+      );
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  // Cached once (lazily, on first read) — see the hard-won lesson in
+  // parent_login_screen.dart / dashboard_screen.dart's nudge streams: a
+  // stream recreated inline on every build makes StreamBuilder resubscribe
+  // on any rebuild (including the keyboard opening), destroying focus.
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _dailyDataStreamCached =
+      FirebaseFirestore.instance
+          .collection('families').doc(widget.familyId)
+          .collection('dailyData').doc(widget.dateKey)
+          .snapshots();
+
+  Future<void> _changeQuestion() async {
+    setState(() => _changing = true);
+    try {
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('changeNudgePrompt')
+          .call({
+        'familyId': widget.familyId,
+        'accountId': widget.accountId,
+        'nudgeId': widget.nudgeId,
+      });
+      final data = Map<String, dynamic>.from(result.data as Map);
+      if (data['ok'] != true && mounted) {
+        final reason = data['reason'] as String?;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(reason == 'limit_reached'
+              ? "You've used all your question changes for today"
+              : "Couldn't change the question right now"),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'), behavior: SnackBarBehavior.floating));
+      }
+    } finally {
+      if (mounted) setState(() => _changing = false);
+    }
+  }
 
   static const TextStyle _qaStyle = TextStyle(
     fontFamily: 'PlusJakartaSans',
@@ -657,12 +801,47 @@ class _ChildNudgeCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(22),
                 ),
                 child: Text(
-                  question,
+                  widget.question,
                   textAlign: TextAlign.center,
                   style: _qaStyle,
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
+              StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: _dailyDataStreamCached,
+                builder: (context, snap) {
+                  final counts = snap.data?.data()?['nudgeChangeCount'] as Map<String, dynamic>?;
+                  final used = (counts?[widget.accountId] as int?) ?? 0;
+                  final remaining = (_maxChangesPerDay - used).clamp(0, _maxChangesPerDay);
+                  final canChange = remaining > 0 && !_changing;
+                  return Align(
+                    alignment: Alignment.centerRight,
+                    child: ElevatedButton.icon(
+                      onPressed: canChange ? _changeQuestion : null,
+                      icon: _changing
+                          ? const SizedBox(width: 14, height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.shuffle_rounded, size: 16),
+                      label: Text(
+                        remaining > 0 ? 'Change question ($remaining left)' : 'No changes left today',
+                        style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12, fontWeight: FontWeight.w700),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: canChange ? Colors.black87 : Colors.black26,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: Colors.black26,
+                        disabledForegroundColor: Colors.white70,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
@@ -671,12 +850,15 @@ class _ChildNudgeCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(22),
                 ),
                 child: TextField(
-                  controller: controller,
+                  controller: widget.controller,
                   maxLines: 7,
+                  enabled: _audioLocalPath == null,
                   style: _answerStyle,
-                  decoration: const InputDecoration(
-                    hintText: 'Type here...',
-                    hintStyle: TextStyle(
+                  decoration: InputDecoration(
+                    hintText: _audioLocalPath == null
+                        ? 'Type here...'
+                        : 'Recorded a voice answer below — typed text is ignored',
+                    hintStyle: const TextStyle(
                       fontFamily: 'PlusJakartaSans',
                       fontSize: 18,
                       fontStyle: FontStyle.italic,
@@ -688,13 +870,23 @@ class _ChildNudgeCard extends StatelessWidget {
                   ),
                 ),
               ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: AudioRecorderField(
+                  onChanged: (path, dur) => setState(() {
+                    _audioLocalPath = path;
+                    _audioDurationSeconds = dur;
+                  }),
+                ),
+              ),
               const SizedBox(height: 14),
               Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   _ShareWithParent(
-                    value: shareWithParent,
-                    onChanged: onShareChanged,
+                    value: widget.shareWithParent,
+                    onChanged: widget.onShareChanged,
                   ),
                   const Spacer(),
                   SizedBox(
@@ -713,7 +905,7 @@ class _ChildNudgeCard extends StatelessWidget {
                         ],
                       ),
                       child: ElevatedButton(
-                        onPressed: onSave,
+                        onPressed: _saving ? null : _save,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: Colors.white.withOpacity(0.55),
                           foregroundColor: Colors.black,
@@ -723,8 +915,13 @@ class _ChildNudgeCard extends StatelessWidget {
                             borderRadius: BorderRadius.circular(999),
                           ),
                         ),
-                        child: const Center(
-                          child: Text(
+                        child: Center(
+                          child: _saving
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(strokeWidth: 2))
+                              : const Text(
                             'SAVE',
                             style: TextStyle(
                               fontFamily: 'PlusJakartaSans',
@@ -754,6 +951,8 @@ class _ReadOnlyChildAnswerCard extends StatelessWidget {
   final String headerLine;
   final String privacyLine;
   final String? answerText;
+  final String? audioUrl;
+  final int? audioDurationSeconds;
 
   const _ReadOnlyChildAnswerCard({
     required this.question,
@@ -761,6 +960,8 @@ class _ReadOnlyChildAnswerCard extends StatelessWidget {
     required this.headerLine,
     required this.privacyLine,
     required this.answerText,
+    this.audioUrl,
+    this.audioDurationSeconds,
   });
 
   static const TextStyle _qaStyle = TextStyle(
@@ -852,10 +1053,13 @@ class _ReadOnlyChildAnswerCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Text(
-                      answerText ?? '(No answer text found)',
-                      style: _answerStyle,
-                    ),
+                    if (audioUrl != null)
+                      AudioPlayButton(audioUrl: audioUrl!, durationSeconds: audioDurationSeconds)
+                    else
+                      Text(
+                        answerText ?? '(No answer text found)',
+                        style: _answerStyle,
+                      ),
                   ],
                 ),
               ),

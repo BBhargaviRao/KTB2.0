@@ -267,10 +267,17 @@ Rules:
 Write like a real app nudge:
 short, warm, and easy to act on
 
+Also write a "conversationStarter": a single simple, warm, low-pressure
+question the parent could ask their child OUT LOUD in person tonight —
+distinct from parentPrompt (which the parent answers privately in the app).
+It should feel like a natural conversation opener, not an interrogation.
+Same privacy rules apply: no specifics, no quotes, no platform/game names.
+
 Return JSON only:
 {
   "contextType": "positive | challenging | neutral",
-  "parentPrompt": "..."
+  "parentPrompt": "...",
+  "conversationStarter": "..."
 }
         `,
       },
@@ -291,6 +298,7 @@ Return JSON only:
   return {
     contextType: parsed.contextType || "neutral",
     parentPrompt: parsed.parentPrompt,
+    conversationStarter: parsed.conversationStarter || null,
   };
 }
 
@@ -579,100 +587,116 @@ function getPromptBank() {
       },
     ],
 
-    child_afternoon: [
-      // mood_and_screens
-      {
-        id: "child_afternoon_mood_1",
-        category: "mood_and_screens",
-        variant: "feelings_check",
-        source: "library",
-        text: "How are you feeling about your screen time so far today?",
-      },
-      {
-        id: "child_afternoon_mood_2",
-        category: "mood_and_screens",
-        variant: "good_moment",
-        source: "library",
-        text: "Has anything online made you laugh, smile, or feel good today?",
-      },
-      {
-        id: "child_afternoon_mood_3",
-        category: "mood_and_screens",
-        variant: "chill_vs_chaotic",
-        source: "library",
-        text:
-          "On a scale of chill to chaotic, how has your screen time felt " +
-          "today?",
-      },
-      // specific_activity
-      {
-        id: "child_afternoon_activity_1",
-        category: "specific_activity",
-        variant: "most_time_spent",
-        source: "library",
-        text: "What app or game have you spent the most time on today?",
-      },
-      {
-        id: "child_afternoon_activity_2",
-        category: "specific_activity",
-        variant: "made_or_learned",
-        source: "library",
-        text: "Did you make or learn anything using a screen today?",
-      },
-      {
-        id: "child_afternoon_activity_3",
-        category: "specific_activity",
-        variant: "most_interesting",
-        source: "library",
-        text: "What's the most interesting thing you've done on a screen today?",
-      },
-      // social_online
-      {
-        id: "child_afternoon_social_1",
-        category: "social_online",
-        variant: "friends_online",
-        source: "library",
-        text: "Did you talk to any friends online today? How did that feel?",
-      },
-      {
-        id: "child_afternoon_social_2",
-        category: "social_online",
-        variant: "stuck_with_you",
-        source: "library",
-        text: "Has anything you saw online today stuck with you?",
-      },
-      {
-        id: "child_afternoon_social_3",
-        category: "social_online",
-        variant: "proud_share",
-        source: "library",
-        text: "Did you share anything online today you were proud of?",
-      },
-      // frustration_check
-      {
-        id: "child_afternoon_frustration_1",
-        category: "frustration_check",
-        variant: "annoyance_check",
-        source: "library",
-        text:
-          "Was there anything about using a screen today that felt " +
-          "frustrating or annoying?",
-      },
-      {
-        id: "child_afternoon_frustration_2",
-        category: "frustration_check",
-        variant: "made_it_worse",
-        source: "library",
-        text: "Did any app or website make you feel worse instead of better today?",
-      },
-      {
-        id: "child_afternoon_frustration_3",
-        category: "frustration_check",
-        variant: "wish_different",
-        source: "library",
-        text: "Is there anything about your screen time today you wish had gone differently?",
-      },
-    ],
+    // Age-tiered: keyed by bracket ("6_7", "8_9", "10_11") — see
+    // getChildAgeGroup(). Wording gets simpler/more concrete for younger
+    // brackets and more reflective/open-ended for older ones. Each question
+    // carries a "category" used by the adaptive weighting in
+    // pickPromptForAccount (goal-matching, screen-time context, variety).
+    child_afternoon: {
+      "6_7": [
+        {id: "a67_1", category: "mood_and_feelings", variant: "happy_or_grumpy", source: "library",
+          text: "Was today a happy screen day or a grumpy screen day?"},
+        {id: "a67_2", category: "specific_activity", variant: "made_you_smile", source: "library",
+          text: "What game or show made you smile today?"},
+        {id: "a67_3", category: "specific_activity", variant: "something_new", source: "library",
+          text: "Did you watch or play something new today?"},
+        {id: "a67_4", category: "social_online", variant: "talked_or_played_with", source: "library",
+          text: "Who did you talk to or play with online today, if anyone?"},
+        {id: "a67_5", category: "mood_and_feelings", variant: "mad_or_upset", source: "library",
+          text: "Did a screen game or show ever make you feel mad or upset today?"},
+        {id: "a67_6", category: "specific_activity", variant: "favorite_thing", source: "library",
+          text: "What was your favorite thing you did on a screen today?"},
+        {id: "a67_7", category: "balance_and_limits", variant: "asked_permission", source: "library",
+          text: "Did you ask a grown-up before using a new app or game today?"},
+        {id: "a67_8", category: "balance_and_limits", variant: "easy_or_hard_to_stop", source: "library",
+          text: "Was it easy or hard to stop when your screen time was over?"},
+        {id: "a67_9", category: "specific_activity", variant: "learned_something", source: "library",
+          text: "Did you learn a new word, fact, or trick from a screen today?",
+          example: "a new song, a fun animal fact, a game trick"},
+        {id: "a67_10", category: "balance_and_limits", variant: "screen_vs_outside", source: "library",
+          text: "Would you rather play outside or on a screen right now?"},
+        {id: "a67_11", category: "social_online", variant: "shared_or_took_turns", source: "library",
+          text: "Did you share your screen or take turns with anyone today?"},
+        {id: "a67_12", category: "specific_activity", variant: "silly_thing", source: "library",
+          text: "What's one silly thing that happened on a screen today?"},
+        {id: "a67_13", category: "mood_and_feelings", variant: "excited_bored_sleepy", source: "library",
+          text: "Did you feel excited, bored, or sleepy while using your screen today?"},
+        {id: "a67_14", category: "mood_and_feelings", variant: "scared_or_weird", source: "library",
+          text: "Did anything on your screen scare you or make you feel weird today?"},
+        {id: "a67_15", category: "balance_and_limits", variant: "one_thing_tomorrow", source: "library",
+          text: "If you could only do ONE screen thing tomorrow, what would you pick?"},
+      ],
+      "8_9": [
+        {id: "a89_1", category: "mood_and_feelings", variant: "feelings_check", source: "library",
+          text: "How are you feeling about your screen time so far today?"},
+        {id: "a89_2", category: "specific_activity", variant: "most_time_spent", source: "library",
+          text: "What app or game did you spend the most time on today?"},
+        {id: "a89_3", category: "mood_and_feelings", variant: "good_moment", source: "library",
+          text: "Did anything online make you laugh, smile, or feel good today?"},
+        {id: "a89_4", category: "specific_activity", variant: "made_or_learned", source: "library",
+          text: "Did you learn or make anything using a screen today?"},
+        {id: "a89_5", category: "social_online", variant: "friends_online", source: "library",
+          text: "Have you talked to any friends online today? What about?"},
+        {id: "a89_6", category: "balance_and_limits", variant: "too_long_moment", source: "library",
+          text: "Was there a moment today you felt like you were on your screen too long?"},
+        {id: "a89_7", category: "reflection_and_growth", variant: "confused_or_curious", source: "library",
+          text: "Did you see anything online today that confused you or made you curious?"},
+        {id: "a89_8", category: "specific_activity", variant: "most_interesting", source: "library",
+          text: "What's the most interesting thing you've done on a screen today?"},
+        {id: "a89_9", category: "balance_and_limits", variant: "asked_permission", source: "library",
+          text: "Did you ask permission before trying a new app or game today?"},
+        {id: "a89_10", category: "mood_and_feelings", variant: "chill_vs_chaotic", source: "library",
+          text: "On a scale of chill to chaotic, how has your screen time felt today?"},
+        {id: "a89_11", category: "balance_and_limits", variant: "took_breaks", source: "library",
+          text: "Did you take any breaks between screen activities today?"},
+        {id: "a89_12", category: "social_online", variant: "unkind_comment", source: "library",
+          text: "Has anyone said anything online today that felt unkind?",
+          example: "teasing in a game chat, a rude comment"},
+        {id: "a89_13", category: "balance_and_limits", variant: "rather_be_doing", source: "library",
+          text: "What would you rather be doing right now if not on a screen?"},
+        {id: "a89_14", category: "balance_and_limits", variant: "tasks_before_or_after", source: "library",
+          text: "Did you finish your other tasks before or after screen time today?"},
+        {id: "a89_15", category: "specific_activity", variant: "wish_more_of", source: "library",
+          text: "What's one game or app you wish you could use more of today?"},
+        {id: "a89_16", category: "reflection_and_growth", variant: "reward_or_habit", source: "library",
+          text: "Did today's screen time feel like a reward or just a habit?"},
+      ],
+      "10_11": [
+        {id: "a1011_1", category: "reflection_and_growth", variant: "relationship_with_screens", source: "library",
+          text: "How would you describe your relationship with your screen time today so far?"},
+        {id: "a1011_2", category: "reflection_and_growth", variant: "worthwhile_thing", source: "library",
+          text: "What's one thing you did on a screen today that felt genuinely worthwhile?"},
+        {id: "a1011_3", category: "reflection_and_growth", variant: "scrolling_without_thinking", source: "library",
+          text: "Did you notice yourself scrolling or switching apps without really thinking about it today?"},
+        {id: "a1011_4", category: "mood_and_feelings", variant: "shaped_your_mood", source: "library",
+          text: "Has anything you've seen online today shaped your mood, positively or negatively?"},
+        {id: "a1011_5", category: "social_online", variant: "online_vs_in_person", source: "library",
+          text: "Did a conversation with a friend online today feel different from talking in person?"},
+        {id: "a1011_6", category: "reflection_and_growth", variant: "made_you_think", source: "library",
+          text: "What's something you saw today that made you think, even if just for a second?"},
+        {id: "a1011_7", category: "balance_and_limits", variant: "matched_what_wanted", source: "library",
+          text: "Do you feel like today's screen time matched what you actually wanted to do, or did you just default to it?"},
+        {id: "a1011_8", category: "social_online", variant: "compared_to_someone", source: "library",
+          text: "Has anything online today made you compare yourself to someone else?",
+          example: "how someone looks, what they own, what they've achieved"},
+        {id: "a1011_9", category: "reflection_and_growth", variant: "change_if_redo", source: "library",
+          text: "What's one thing you'd change about how you're using screens today if you could redo it?"},
+        {id: "a1011_10", category: "reflection_and_growth", variant: "present_or_distracted", source: "library",
+          text: "Did you feel present in what you were doing on your screen, or distracted the whole time?"},
+        {id: "a1011_11", category: "balance_and_limits", variant: "planned_vs_actual", source: "library",
+          text: "Is there a difference between what you planned to do on your screen today and what you actually did?"},
+        {id: "a1011_12", category: "reflection_and_growth", variant: "usage_patterns", source: "library",
+          text: "Have you noticed any patterns in when you reach for a screen — boredom, stress, habit?"},
+        {id: "a1011_13", category: "specific_activity", variant: "curious_to_explore", source: "library",
+          text: "What's something you're curious about that you could look into today?"},
+        {id: "a1011_14", category: "balance_and_limits", variant: "personal_limit", source: "library",
+          text: "Did you set any personal limit today, and did you stick to it?"},
+        {id: "a1011_15", category: "balance_and_limits", variant: "choice_or_autopilot", source: "library",
+          text: "Has your screen time today felt more like a choice or more like autopilot?"},
+        {id: "a1011_16", category: "social_online", variant: "what_peers_care_about", source: "library",
+          text: "What's one thing happening online right now that people your age seem to care about?"},
+      ],
+    },
 
     parent_evening: [
       // daily_observation
@@ -779,96 +803,109 @@ function getPromptBank() {
       },
     ],
 
-    child_night: [
-      // gratitude_and_highlights
-      {
-        id: "child_night_gratitude_1",
-        category: "gratitude_and_highlights",
-        variant: "good_screen_moment",
-        source: "library",
-        text: "What's one good thing that happened on your screen today?",
-      },
-      {
-        id: "child_night_gratitude_2",
-        category: "gratitude_and_highlights",
-        variant: "grateful_for",
-        source: "library",
-        text: "What are you grateful for from today, screen-related or not?",
-      },
-      {
-        id: "child_night_gratitude_3",
-        category: "gratitude_and_highlights",
-        variant: "best_part_of_day",
-        source: "library",
-        text: "What was the best part of your day today?",
-      },
-      // self_awareness
-      {
-        id: "child_night_awareness_1",
-        category: "self_awareness",
-        variant: "spent_time_as_wanted",
-        source: "library",
-        text: "Do you think you spent your screen time today the way you wanted to?",
-      },
-      {
-        id: "child_night_awareness_2",
-        category: "self_awareness",
-        variant: "do_differently",
-        source: "library",
-        text: "Is there anything you'd do differently with your screen time tomorrow?",
-      },
-      {
-        id: "child_night_awareness_3",
-        category: "self_awareness",
-        variant: "before_and_after_feeling",
-        source: "library",
-        text: "Did you notice how you felt before and after using screens today?",
-      },
-      // tomorrow_goals
-      {
-        id: "child_night_goals_1",
-        category: "tomorrow_goals",
-        variant: "want_to_do_tomorrow",
-        source: "library",
-        text: "Is there something fun or productive you want to do on a screen tomorrow?",
-      },
-      {
-        id: "child_night_goals_2",
-        category: "tomorrow_goals",
-        variant: "want_to_do_less",
-        source: "library",
-        text: "Is there an app or game you want to spend less time on tomorrow?",
-      },
-      {
-        id: "child_night_goals_3",
-        category: "tomorrow_goals",
-        variant: "non_screen_goal",
-        source: "library",
-        text: "What's one thing you want to do tomorrow that isn't on a screen?",
-      },
-      // sleep_and_screens
-      {
-        id: "child_night_sleep_1",
-        category: "sleep_and_screens",
-        variant: "ready_for_bed",
-        source: "library",
-        text: "Do you feel ready to put your screen away and get good sleep tonight?",
-      },
-      {
-        id: "child_night_sleep_2",
-        category: "sleep_and_screens",
-        variant: "relax_or_wind_up",
-        source: "library",
-        text: "Did screens help you relax tonight, or make it harder to wind down?",
-      },
-      {
-        id: "child_night_sleep_3",
-        category: "sleep_and_screens",
-        variant: "time_before_bed",
-        source: "library",
-        text: "How much time before bed did you put your screen away tonight?",
-      },
-    ],
+    child_night: {
+      "6_7": [
+        {id: "n67_1", category: "gratitude_and_connection", variant: "best_part_of_day", source: "library",
+          text: "What was the best part of your day, screen or not?"},
+        {id: "n67_2", category: "balance_and_limits", variant: "screen_vs_other_fun", source: "library",
+          text: "Did you have more fun on a screen or doing something else today?"},
+        {id: "n67_3", category: "mood_and_feelings", variant: "made_you_laugh", source: "library",
+          text: "What's one thing that made you laugh today?"},
+        {id: "n67_4", category: "balance_and_limits", variant: "happy_with_amount", source: "library",
+          text: "Are you happy with how much screen time you had today?"},
+        {id: "n67_5", category: "gratitude_and_connection", variant: "helped_or_played_nicely", source: "library",
+          text: "Did you help someone or play nicely with someone today?"},
+        {id: "n67_6", category: "reflection_and_growth", variant: "tomorrow_plan", source: "library",
+          text: "What do you want to do tomorrow — same screen stuff or something new?"},
+        {id: "n67_7", category: "wind_down", variant: "felt_tired", source: "library",
+          text: "Did you feel tired after your screen time today?"},
+        {id: "n67_8", category: "gratitude_and_connection", variant: "thankful_for", source: "library",
+          text: "What's one thing you're thankful for from today?"},
+        {id: "n67_9", category: "gratitude_and_connection", variant: "kind_to_family", source: "library",
+          text: "Did you do anything kind for your family today?"},
+        {id: "n67_10", category: "gratitude_and_connection", variant: "tell_parent", source: "library",
+          text: "Was there a moment today you want to tell your parent about?"},
+        {id: "n67_11", category: "balance_and_limits", variant: "screen_free_too", source: "library",
+          text: "Did you read a book or do something screen-free today too?"},
+        {id: "n67_12", category: "specific_activity", variant: "funniest_thing", source: "library",
+          text: "What's the funniest thing you saw on a screen today?",
+          example: "a funny video, a silly game character"},
+        {id: "n67_13", category: "wind_down", variant: "calm_or_excited", source: "library",
+          text: "Do you feel calm and ready for bed, or still excited?"},
+        {id: "n67_14", category: "balance_and_limits", variant: "followed_rules", source: "library",
+          text: "Did you play a game with rules today, and did you follow them?"},
+        {id: "n67_15", category: "reflection_and_growth", variant: "do_differently", source: "library",
+          text: "What's one thing you want to do differently tomorrow?"},
+      ],
+      "8_9": [
+        {id: "n89_1", category: "specific_activity", variant: "best_part_of_screen_time", source: "library",
+          text: "Looking back, what was the best part of your screen time today?"},
+        {id: "n89_2", category: "balance_and_limits", variant: "balanced_other_things", source: "library",
+          text: "Did you balance screens with other things today, like playing outside or reading?"},
+        {id: "n89_3", category: "gratitude_and_connection", variant: "grateful_for", source: "library",
+          text: "What's something you're grateful for from today?"},
+        {id: "n89_4", category: "reflection_and_growth", variant: "in_control", source: "library",
+          text: "Did you feel like you were in control of your screen time today, or did it control you?"},
+        {id: "n89_5", category: "balance_and_limits", variant: "screen_free_moment_enjoyed", source: "library",
+          text: "Was there a screen-free moment today you actually enjoyed?"},
+        {id: "n89_6", category: "reflection_and_growth", variant: "stuck_in_mind", source: "library",
+          text: "Did anything you saw or played today stick in your mind afterward?"},
+        {id: "n89_7", category: "wind_down", variant: "mood_by_end_of_day", source: "library",
+          text: "How did your screen time affect your mood by the end of the day?"},
+        {id: "n89_8", category: "gratitude_and_connection", variant: "helped_family", source: "library",
+          text: "Did you help anyone in your family today, on a screen or off?"},
+        {id: "n89_9", category: "reflection_and_growth", variant: "try_differently", source: "library",
+          text: "What's one thing you want to try differently with screens tomorrow?"},
+        {id: "n89_10", category: "wind_down", variant: "rushed_or_relaxed", source: "library",
+          text: "Did you feel rushed or relaxed during your screen time today?"},
+        {id: "n89_11", category: "balance_and_limits", variant: "spending_too_much_time", source: "library",
+          text: "Is there a game or show you think you're spending too much time on lately?"},
+        {id: "n89_12", category: "social_online", variant: "tell_a_friend", source: "library",
+          text: "What's a moment from today — on a screen or not — you'd want to tell a friend about?"},
+        {id: "n89_13", category: "reflection_and_growth", variant: "kept_promises", source: "library",
+          text: "Did you keep any promises you made about your screen time today?"},
+        {id: "n89_14", category: "reflection_and_growth", variant: "noticed_about_self", source: "library",
+          text: "What's something new you noticed about yourself today?"},
+        {id: "n89_15", category: "gratitude_and_connection", variant: "looking_forward", source: "library",
+          text: "Are you looking forward to anything tomorrow, screen-related or not?"},
+        {id: "n89_16", category: "reflection_and_growth", variant: "good_screen_day_overall", source: "library",
+          text: "Did today feel like a \"good screen day\" overall? Why or why not?"},
+      ],
+      "10_11": [
+        {id: "n1011_1", category: "reflection_and_growth", variant: "relationship_with_screens", source: "library",
+          text: "Looking back at today, how would you describe your relationship with screens?"},
+        {id: "n1011_2", category: "social_online", variant: "helped_or_hindered_connection", source: "library",
+          text: "Did screens help you connect with people today, or did they get in the way of connecting?"},
+        {id: "n1011_3", category: "reflection_and_growth", variant: "surprised_you", source: "library",
+          text: "What's one thing you noticed about your own habits today that surprised you?"},
+        {id: "n1011_4", category: "reflection_and_growth", variant: "value_vs_filler", source: "library",
+          text: "Do you think today's screen time added value to your day, or was some of it just filler?"},
+        {id: "n1011_5", category: "balance_and_limits", variant: "chose_not_to_check", source: "library",
+          text: "Was there a moment today when you chose NOT to check something, even though you wanted to?"},
+        {id: "n1011_6", category: "wind_down", variant: "more_like_yourself", source: "library",
+          text: "Did you feel more like yourself when you were off your screen today, or on it?"},
+        {id: "n1011_7", category: "gratitude_and_connection", variant: "proud_of", source: "library",
+          text: "What's something you're proud of from today, screen-related or not?"},
+        {id: "n1011_8", category: "reflection_and_growth", variant: "think_about_total_time", source: "library",
+          text: "Did anything today make you think about how much time you spend on your screen overall?"},
+        {id: "n1011_9", category: "balance_and_limits", variant: "own_boundary", source: "library",
+          text: "Is there a boundary around screens you want to set for yourself, not just one your parents set?"},
+        {id: "n1011_10", category: "reflection_and_growth", variant: "intentional_tomorrow", source: "library",
+          text: "What's one thing you want to be more intentional about tomorrow?"},
+        {id: "n1011_11", category: "wind_down", variant: "felt_after_putting_down", source: "library",
+          text: "Did you notice how you felt right after putting your screen down today?"},
+        {id: "n1011_12", category: "gratitude_and_connection", variant: "screen_free_meaningful", source: "library",
+          text: "Was there a screen-free part of today that ended up being more meaningful than you expected?"},
+        {id: "n1011_13", category: "reflection_and_growth", variant: "focused_or_scattered", source: "library",
+          text: "Do you think you were more focused or more scattered today because of your screen use?"},
+        {id: "n1011_14", category: "social_online", variant: "question_wish_asked", source: "library",
+          text: "What's a question you wish someone would ask you about your online life?"},
+        {id: "n1011_15", category: "reflection_and_growth", variant: "healthy_or_not", source: "library",
+          text: "If you described today's screen time to a friend, would you call it healthy, or not really?"},
+        {id: "n1011_16", category: "reflection_and_growth", variant: "learned_about_self", source: "library",
+          text: "What's one small thing you learned about yourself today?"},
+      ],
+    },
   };
 }
 
@@ -888,14 +925,65 @@ function pickRandom(items) {
 // keeps things feeling varied even before the bigger bank existed.
 const RECENT_PROMPT_HISTORY = 5;
 
+// Maps a parent-selected family goal (see "Set Child Details" UI) to the
+// question category it should mildly favor. "wind_down" doubles as its own
+// category (night-window sleep/calm questions) rather than folding into
+// mood_and_feelings, so the goal has something distinct to boost.
+const GOAL_CATEGORY_MAP = {
+  less_gaming: "balance_and_limits",
+  wind_down: "wind_down",
+  more_connection: "social_online",
+  more_creativity: "specific_activity",
+  more_reflection: "reflection_and_growth",
+};
+
+function ageToGroup(age) {
+  const n = Number(age);
+  if (!Number.isFinite(n)) return "8_9";
+  if (n <= 7) return "6_7";
+  if (n <= 9) return "8_9";
+  return "10_11";
+}
+
+// Weighted random pick — used instead of a hard filter so "adaptive" biasing
+// (goals, screen-time context, category variety) never collapses the
+// eligible set down to just one or two options and starts feeling robotic.
+function pickWeighted(items, weightFn) {
+  if (!items || !items.length) return null;
+  const weights = items.map((item) => Math.max(0, weightFn(item)));
+  const total = weights.reduce((a, b) => a + b, 0);
+  if (total <= 0) return pickRandom(items);
+  let r = Math.random() * total;
+  for (let i = 0; i < items.length; i++) {
+    r -= weights[i];
+    if (r <= 0) return items[i];
+  }
+  return items[items.length - 1];
+}
+
+// context: {ageGroup, familyGoals, screenTimeRatio}
+// - ageGroup selects which child_afternoon/child_night bracket to read from
+//   (parent_morning/parent_evening are flat arrays and ignore ageGroup).
+// - familyGoals (array of GOAL_CATEGORY_MAP keys) mildly boosts matching
+//   categories.
+// - screenTimeRatio (0-1, today's used/limit minutes) mildly boosts
+//   balance_and_limits questions on a heavy-usage day.
+// - Previous-answer adaptiveness: mildly de-weights repeating the exact
+//   category of this account+window's last nudge, on top of the existing
+//   hard exclusion of recently-used exact question ids.
 async function pickPromptForAccount(
     db,
     familyId,
     accountId,
     deliveryWindow,
+    context = {},
 ) {
+  const {ageGroup, familyGoals, screenTimeRatio} = context;
   const promptBank = getPromptBank();
-  const prompts = promptBank[deliveryWindow] || [];
+  const bankEntry = promptBank[deliveryWindow];
+  const prompts = Array.isArray(bankEntry) ?
+    bankEntry :
+    (bankEntry ? (bankEntry[ageGroup] || bankEntry["8_9"] || []) : []);
 
   if (!prompts.length) {
     return null;
@@ -911,11 +999,13 @@ async function pickPromptForAccount(
       .limit(RECENT_PROMPT_HISTORY)
       .get();
 
+  const recentDocs = recentSnapshot.docs.map((doc) => doc.data());
   const recentPromptIds = new Set(
-      recentSnapshot.docs
-          .map((doc) => doc.data().promptId)
-          .filter((id) => !!id),
+      recentDocs.map((d) => d.promptId).filter((id) => !!id),
   );
+  const previousCategory = recentDocs.length > 0 ?
+    recentDocs[0].promptCategory :
+    null;
 
   let eligiblePrompts = prompts;
 
@@ -929,7 +1019,20 @@ async function pickPromptForAccount(
     }
   }
 
-  return pickRandom(eligiblePrompts);
+  const goalCategories = new Set(
+      (familyGoals || []).map((g) => GOAL_CATEGORY_MAP[g]).filter(Boolean),
+  );
+  const contextCategory = (typeof screenTimeRatio === "number" && screenTimeRatio >= 0.75) ?
+    "balance_and_limits" :
+    null;
+
+  return pickWeighted(eligiblePrompts, (prompt) => {
+    let weight = 1;
+    if (goalCategories.has(prompt.category)) weight += 2;
+    if (contextCategory && prompt.category === contextCategory) weight += 1;
+    if (previousCategory && prompt.category === previousCategory) weight *= 0.4;
+    return weight;
+  });
 }
 
 exports.sendAdmTestNotification = functions.https.onRequest(
@@ -1157,10 +1260,10 @@ const DEFAULT_CHILD_WINDOWS = {
   child_night: {startHour: 18, endHour: 20},
 };
 
-// Reads the parent-configured delivery windows for the child's two daily
-// nudges from families/{familyId}/settings/nudges (set via the "Nudge
-// delivery window for the child" UI in the Nudges tab). Falls back to
-// DEFAULT_CHILD_WINDOWS for any window not yet customized. Only the child's
+// Reads the parent-configured delivery windows, child age bracket, and
+// family goals from families/{familyId}/settings/nudges (all set together
+// via the "Set Child Details" UI in the Nudges tab, one Firestore doc/read).
+// Falls back to defaults for anything not yet customized. Only the child's
 // windows are configurable this way — parent_morning/parent_evening stay
 // fixed, since this feature is specifically about the child's delivery times.
 async function getChildNudgeWindows(db, familyId) {
@@ -1173,18 +1276,86 @@ async function getChildNudgeWindows(db, familyId) {
         .get();
 
     if (!doc.exists) {
-      return DEFAULT_CHILD_WINDOWS;
+      return {...DEFAULT_CHILD_WINDOWS, ageGroup: "8_9", familyGoals: []};
     }
 
     const data = doc.data() || {};
     return {
       child_afternoon: data.childWindow1 || DEFAULT_CHILD_WINDOWS.child_afternoon,
       child_night: data.childWindow2 || DEFAULT_CHILD_WINDOWS.child_night,
+      ageGroup: ageToGroup(data.childAge),
+      familyGoals: Array.isArray(data.familyGoals) ? data.familyGoals : [],
     };
   } catch (err) {
     console.error("Failed to read nudge window settings, using defaults:", err);
-    return DEFAULT_CHILD_WINDOWS;
+    return {...DEFAULT_CHILD_WINDOWS, ageGroup: "8_9", familyGoals: []};
   }
+}
+
+// Today's used/limit minutes ratio (0-1), used to mildly favor
+// balance_and_limits questions on a heavy-usage day. Returns null (no bias)
+// if either value is missing — a new/short day shouldn't read as "light usage".
+async function getScreenTimeRatio(db, familyId, dateKey) {
+  try {
+    const [daySnap, settingsSnap] = await Promise.all([
+      db.collection("families").doc(familyId)
+          .collection("dashboard_days").doc(dateKey).get(),
+      db.collection("families").doc(familyId)
+          .collection("settings").doc("screenTime").get(),
+    ]);
+    const used = daySnap.exists ? daySnap.data().screenTimeUsedMinutes : null;
+    const limit = settingsSnap.exists ? settingsSnap.data().screenTimeLimitMinutes : null;
+    if (typeof used !== "number" || typeof limit !== "number" || limit <= 0) {
+      return null;
+    }
+    return used / limit;
+  } catch (err) {
+    console.error("Failed to compute screen time ratio:", err);
+    return null;
+  }
+}
+
+// dateKey is "yyyy-MM-dd" — returns the same format for the previous day,
+// via plain date math (UTC-safe since we only care about the calendar date,
+// not time-of-day).
+function previousDateKey(dateKey) {
+  const [y, m, d] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  date.setUTCDate(date.getUTCDate() - 1);
+  const yy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
+// Simple reward: consecutive-day streak of answering at least one nudge.
+// Keyed off the NUDGE's own dateKey (not "today" server-side) so it stays
+// consistent with everything else that's keyed the same way (changeNudgePrompt,
+// dashboard_days, etc.) rather than introducing a third notion of "today".
+async function updateChildAnswerStreak(db, familyId, accountId, dateKey) {
+  if (!dateKey) return;
+  const accountRef = db.collection("families").doc(familyId)
+      .collection("accounts").doc(accountId);
+
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(accountRef);
+    const acct = snap.exists ? snap.data() : {};
+    const lastKey = acct.lastAnsweredDateKey;
+
+    if (lastKey === dateKey) {
+      // Already counted an answer for this day — a second nudge answered
+      // the same day doesn't add a second streak day.
+      return;
+    }
+
+    const currentStreak = acct.answerStreak || 0;
+    const newStreak = lastKey === previousDateKey(dateKey) ? currentStreak + 1 : 1;
+
+    tx.set(accountRef, {
+      answerStreak: newStreak,
+      lastAnsweredDateKey: dateKey,
+    }, {merge: true});
+  });
 }
 
 function getScheduledTimeForWindow(dateKey, deliveryWindow, childWindows) {
@@ -1332,6 +1503,10 @@ exports.generateDailyNudges = functions
             continue;
           }
 
+          const screenTimeRatio = role === "child" ?
+            await getScreenTimeRatio(db, familyId, dateKey) :
+            null;
+
           for (const windowItem of windows) {
             const deliveryWindow = windowItem.deliveryWindow;
             const nudgeType = windowItem.nudgeType;
@@ -1341,6 +1516,11 @@ exports.generateDailyNudges = functions
                 familyId,
                 account.id,
                 deliveryWindow,
+                {
+                  ageGroup: childWindows.ageGroup,
+                  familyGoals: childWindows.familyGoals,
+                  screenTimeRatio,
+                },
             );
 
             if (!selectedPrompt) {
@@ -1354,6 +1534,7 @@ exports.generateDailyNudges = functions
             let finalPrompt = selectedPrompt.text;
             let finalPromptCategory = selectedPrompt.category;
             let promptGenerationMode = "library";
+            let conversationStarter = null;
 
             if (role === "parent" && deliveryWindow === "parent_evening") {
               try {
@@ -1367,6 +1548,7 @@ exports.generateDailyNudges = functions
                   if (result && result.parentPrompt) {
                     finalPrompt = result.parentPrompt;
                     promptGenerationMode = "llm_context";
+                    conversationStarter = result.conversationStarter || null;
 
                     if (result.contextType === "positive") {
                       finalPromptCategory = "parent_evening_context_positive";
@@ -1429,6 +1611,7 @@ exports.generateDailyNudges = functions
                   promptVariant: selectedPrompt.variant,
                   promptSource: selectedPrompt.source,
                   promptGenerationMode: promptGenerationMode,
+                  conversationStarter: conversationStarter,
                   targetAccountId: account.id,
                   targetRole: role,
                   nudgeType: nudgeType,
@@ -1520,6 +1703,10 @@ exports.generateTestNudges = functions
             continue;
           }
 
+          const screenTimeRatio = role === "child" ?
+            await getScreenTimeRatio(db, familyId, dateKey) :
+            null;
+
           for (const windowItem of windows) {
             const deliveryWindow = windowItem.deliveryWindow;
             const nudgeType = windowItem.nudgeType;
@@ -1529,6 +1716,11 @@ exports.generateTestNudges = functions
                 familyId,
                 account.id,
                 deliveryWindow,
+                {
+                  ageGroup: childWindows.ageGroup,
+                  familyGoals: childWindows.familyGoals,
+                  screenTimeRatio,
+                },
             );
 
             if (!selectedPrompt) {
@@ -1542,6 +1734,7 @@ exports.generateTestNudges = functions
             let finalPrompt = selectedPrompt.text;
             let finalPromptCategory = selectedPrompt.category;
             let promptGenerationMode = "library";
+            let conversationStarter = null;
 
             if (role === "parent" && deliveryWindow === "parent_evening") {
               try {
@@ -1555,6 +1748,7 @@ exports.generateTestNudges = functions
                   if (result && result.parentPrompt) {
                     finalPrompt = result.parentPrompt;
                     promptGenerationMode = "llm_context";
+                    conversationStarter = result.conversationStarter || null;
 
                     if (result.contextType === "positive") {
                       finalPromptCategory = "parent_evening_context_positive";
@@ -1621,6 +1815,7 @@ exports.generateTestNudges = functions
                   promptVariant: selectedPrompt.variant,
                   promptSource: selectedPrompt.source,
                   promptGenerationMode: promptGenerationMode,
+                  conversationStarter: conversationStarter,
                   targetAccountId: account.id,
                   targetRole: role,
                   nudgeType: nudgeType,
@@ -1777,6 +1972,16 @@ exports.analyzeAnsweredChildNudge = functions
 
       if (after.targetRole !== "child") {
         return null;
+      }
+
+      // Streak reward — independent of the emotion-analysis path below (and
+      // of response text length), so it updates for every genuine answer.
+      try {
+        await updateChildAnswerStreak(
+            admin.firestore(), context.params.familyId, after.targetAccountId, after.dateKey,
+        );
+      } catch (err) {
+        console.error("updateChildAnswerStreak failed:", err);
       }
 
       const responseText = after.response &&
@@ -2207,6 +2412,199 @@ async function generateUniqueFamilyCode(db) {
 
   throw new Error("Could not generate a unique family code.");
 }
+
+// ── Browser-based family onboarding ───────────────────────────────────────────
+// Visit this URL directly in a browser: it shows a form, and submitting it
+// (a plain GET, so no CORS/body-parsing needed) creates a brand-new, fully
+// isolated family — accounts under a fresh auto-ID familyRef, exactly like
+// createStudyFamily — plus a seeded settings/nudges doc and two pending
+// example nudges (one parent, one child) so there's something to answer
+// immediately instead of waiting for the next day's 00:05 scheduled run.
+// Isolation from other families is the same as everywhere else in this app
+// (see firestore.rules): purely by familyId — nothing here changes that.
+
+function _escapeHtml(s) {
+  return String(s)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+}
+
+function _onboardPageShell(bodyHtml) {
+  return `<!doctype html>
+<html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KTB — New Test Family</title>
+<style>
+  body { font-family: -apple-system, system-ui, sans-serif; background: #F5F3FF; color: #2D2B55;
+         max-width: 480px; margin: 40px auto; padding: 0 20px; }
+  h1 { font-size: 22px; }
+  label { display: block; margin-top: 14px; font-weight: 600; font-size: 13px; color: #6E6A8E; }
+  input { width: 100%; box-sizing: border-box; padding: 10px 12px; margin-top: 4px;
+          border: 1px solid #E0DDEF; border-radius: 10px; font-size: 15px; }
+  button { margin-top: 22px; width: 100%; padding: 13px; border: none; border-radius: 10px;
+           background: #7C6FCD; color: white; font-size: 15px; font-weight: 600; cursor: pointer; }
+  .error { background: #FFEBEE; color: #C0392B; padding: 10px 14px; border-radius: 10px;
+           margin-top: 16px; font-size: 13px; }
+  .card { background: white; padding: 16px 18px; border-radius: 14px; margin-top: 12px;
+          border: 1px solid #E0DDEF; }
+  .row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 14px; }
+  .row b { color: #6E6A8E; font-weight: 600; }
+  .pill { font-family: monospace; font-size: 20px; letter-spacing: 2px; font-weight: 700; }
+</style></head><body>${bodyHtml}</body></html>`;
+}
+
+function _renderOnboardForm({error, parentName, childName} = {}) {
+  return _onboardPageShell(`
+    <h1>Create a new test family</h1>
+    <p style="color:#6E6A8E; font-size:13px;">Creates an isolated family — its own family code, parent + child login PIN, and a couple of example nudges to test with right away.</p>
+    ${error ? `<div class="error">${_escapeHtml(error)}</div>` : ""}
+    <form method="GET">
+      <label>Parent name</label>
+      <input name="parentName" required value="${_escapeHtml(parentName || "")}">
+      <label>Parent PIN (4 digits)</label>
+      <input name="parentPin" required pattern="\\d{4}" inputmode="numeric" maxlength="4">
+      <label>Child name</label>
+      <input name="childName" required value="${_escapeHtml(childName || "")}">
+      <label>Child PIN (4 digits)</label>
+      <input name="childPin" required pattern="\\d{4}" inputmode="numeric" maxlength="4">
+      <button type="submit">Create Family</button>
+    </form>
+  `);
+}
+
+function _renderOnboardSuccess({familyId, familyCode, parentName, parentPin, childName, childPin}) {
+  return _onboardPageShell(`
+    <h1>Family created ✅</h1>
+    <div class="card">
+      <div class="row"><span>Family code</span><b class="pill">${_escapeHtml(familyCode)}</b></div>
+    </div>
+    <div class="card">
+      <div class="row"><span>Parent</span><b>${_escapeHtml(parentName)}</b></div>
+      <div class="row"><span>Parent PIN</span><b>${_escapeHtml(parentPin)}</b></div>
+      <div class="row"><span>Child</span><b>${_escapeHtml(childName)}</b></div>
+      <div class="row"><span>Child PIN</span><b>${_escapeHtml(childPin)}</b></div>
+    </div>
+    <p style="color:#6E6A8E; font-size:12px;">familyId: ${_escapeHtml(familyId)}</p>
+    <p style="font-size:13px;">Open the KTB app, enter the family code and PIN above on either device to log in. Both parent and child already have a pending example nudge ready to answer (including a voice answer, on the child side).</p>
+    <a href="?"><button type="button" style="margin-top:8px;">Create another family</button></a>
+  `);
+}
+
+exports.onboardFamily = functions.https.onRequest(async (req, res) => {
+  const {parentName, childName, parentPin, childPin} = req.query;
+
+  if (!parentName || !childName || !parentPin || !childPin) {
+    return res.status(200).send(_renderOnboardForm());
+  }
+
+  const pinRe = /^\d{4}$/;
+  if (!pinRe.test(String(parentPin)) || !pinRe.test(String(childPin))) {
+    return res.status(200).send(_renderOnboardForm({
+      error: "PIN must be exactly 4 digits.", parentName, childName,
+    }));
+  }
+  if (!String(parentName).trim() || !String(childName).trim()) {
+    return res.status(200).send(_renderOnboardForm({error: "Names cannot be empty."}));
+  }
+
+  try {
+    const db = admin.firestore();
+    const familyCode = await generateUniqueFamilyCode(db);
+
+    const familyRef = db.collection("families").doc();
+    const parentRef = familyRef.collection("accounts").doc("p1");
+    const childRef = familyRef.collection("accounts").doc("c1");
+
+    await familyRef.set({
+      familyCode,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      studyStatus: "active",
+    });
+    await parentRef.set({
+      displayName: String(parentName).trim(),
+      role: "parent",
+      pin: String(parentPin),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    await childRef.set({
+      displayName: String(childName).trim(),
+      role: "child",
+      pin: String(childPin),
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Sane defaults so generateDailyNudges (age-based prompt selection,
+    // family-goal weighting) behaves reasonably from day one instead of
+    // falling back to its "no settings doc yet" defaults.
+    await familyRef.collection("settings").doc("nudges").set({
+      childAge: 10,
+      familyGoals: [],
+      childWindow1: {startHour: 15, endHour: 17},
+      childWindow2: {startHour: 20, endHour: 21},
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedByRole: "system",
+    });
+
+    const {dateKey} = getLocalTimeParts();
+    const now = admin.firestore.Timestamp.now();
+    const baseNudge = {
+      promptVariant: "seed",
+      promptSource: "library",
+      promptGenerationMode: "library",
+      conversationStarter: null,
+      dateKey,
+      status: "pending",
+      notificationStatus: "not_sent",
+      notificationSentAt: null,
+      openedAt: null,
+      answeredAt: null,
+      ignoredAt: null,
+      responseLatencySeconds: null,
+      openLatencySeconds: null,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      scheduledFor: now,
+    };
+    await familyRef.collection("nudges").add({
+      ...baseNudge,
+      prompt: "How are things going with screen time today?",
+      promptText: "How are things going with screen time today?",
+      promptId: "onboard_seed_parent_1",
+      promptCategory: "check_in",
+      targetAccountId: "p1",
+      targetRole: "parent",
+      nudgeType: "check_in",
+      deliveryWindow: "parent_morning",
+    });
+    await familyRef.collection("nudges").add({
+      ...baseNudge,
+      prompt: "What was the best part of your day?",
+      promptText: "What was the best part of your day?",
+      promptId: "onboard_seed_child_1",
+      promptCategory: "reflection_and_growth",
+      targetAccountId: "c1",
+      targetRole: "child",
+      nudgeType: "reflection",
+      deliveryWindow: "child_afternoon",
+    });
+
+    return res.status(200).send(_renderOnboardSuccess({
+      familyId: familyRef.id,
+      familyCode,
+      parentName: String(parentName).trim(),
+      parentPin: String(parentPin),
+      childName: String(childName).trim(),
+      childPin: String(childPin),
+    }));
+  } catch (error) {
+    console.error("onboardFamily failed:", error);
+    return res.status(200).send(_renderOnboardForm({
+      error: `Something went wrong: ${error.message}`, parentName, childName,
+    }));
+  }
+});
+
 // ── Helper: write a notification record to the family's inbox ─────────────────
 
 async function writeNotificationDoc(db, familyId, {title, body, type, targetRole}) {
@@ -2558,6 +2956,10 @@ exports.notifyOnSessionEnded = functions.firestore
                 .set({
                   limitReachedAt: admin.firestore.FieldValue.delete(),
                   limitReachedDateKey: admin.firestore.FieldValue.delete(),
+                  // Per-session limit (equal to that session's duration) —
+                  // must not linger after the session ends, or the client
+                  // dashboard keeps showing/evaluating against a stale cap.
+                  screenTimeLimitMinutes: admin.firestore.FieldValue.delete(),
                 }, {merge: true}),
           ]);
           console.log(`notifyOnSessionEnded: reset screen time for family ${familyId}, date ${dateKey}`);
@@ -2566,6 +2968,41 @@ exports.notifyOnSessionEnded = functions.firestore
         }
       }
 
+      return null;
+    });
+
+// ── Scheduled: auto-complete sessions whose endTime has passed ───────────────
+// _ActiveCard's countdown timer (session_tab.dart) is the only thing that
+// normally marks an expired session "completed" — but it only runs while
+// someone has the Session tab open. If nobody does, the session doc sits at
+// status:"active" indefinitely: screenTimeUsedMinutes/screenTimeLimitMinutes
+// never get reset (notifyOnSessionEnded above only fires on the completed
+// transition), so the next login re-evaluates against that stale "at limit"
+// state and re-fires the "screen time is up" notification even though
+// nothing is actually running anymore. This sweep closes that gap
+// server-side, independent of whether any device has the app open.
+exports.autoCompleteOverdueSessions = functions.pubsub
+    .schedule("every 5 minutes")
+    .onRun(async () => {
+      const db = admin.firestore();
+      const now = admin.firestore.Timestamp.now();
+
+      const activeSessions = await db.collectionGroup("sessions")
+          .where("status", "==", "active")
+          .get();
+
+      const overdue = activeSessions.docs.filter((doc) => {
+        const endTime = doc.data().endTime;
+        return endTime && endTime.toMillis() <= now.toMillis();
+      });
+
+      if (overdue.length === 0) return null;
+
+      await Promise.all(overdue.map((doc) => doc.ref.update({
+        status: "completed",
+      })));
+
+      console.log(`autoCompleteOverdueSessions: closed ${overdue.length} session(s)`);
       return null;
     });
 
@@ -2638,5 +3075,99 @@ exports.relayActiveSessionScreenTime = functions.pubsub
       console.log(`relayActiveSessionScreenTime: sent ${sent} silent push(es)`);
       return null;
     });
+
+// ── Callable: "Change Question" — child can swap a pending nudge's question ──
+// for a different one from the same age-appropriate bank, up to
+// MAX_NUDGE_CHANGES_PER_DAY times total per day (shared across both of the
+// child's daily nudges, not per-nudge). The daily counter lives on
+// families/{familyId}/dailyData/{dateKey}.nudgeChangeCount.{accountId},
+// alongside the day's other todo/mood data, and is enforced inside a
+// transaction so rapid double-taps can't exceed the limit.
+const MAX_NUDGE_CHANGES_PER_DAY = 3;
+
+exports.changeNudgePrompt = functions.https.onCall(async (data) => {
+  const familyId = data.familyId;
+  const accountId = data.accountId;
+  const nudgeId = data.nudgeId;
+
+  if (!familyId || !accountId || !nudgeId) {
+    throw new functions.https.HttpsError(
+        "invalid-argument", "Missing familyId, accountId, or nudgeId.",
+    );
+  }
+
+  const db = admin.firestore();
+  const nudgeRef = db.collection("families").doc(familyId)
+      .collection("nudges").doc(nudgeId);
+
+  const nudgeSnap = await nudgeRef.get();
+  if (!nudgeSnap.exists) {
+    throw new functions.https.HttpsError("not-found", "Nudge not found.");
+  }
+  const nudge = nudgeSnap.data();
+  if (nudge.targetAccountId !== accountId) {
+    throw new functions.https.HttpsError(
+        "permission-denied", "This nudge does not belong to this account.",
+    );
+  }
+  if (nudge.status !== "pending") {
+    throw new functions.https.HttpsError(
+        "failed-precondition", "This nudge has already been answered.",
+    );
+  }
+
+  const dateKey = nudge.dateKey;
+  const dailyDataRef = db.collection("families").doc(familyId)
+      .collection("dailyData").doc(dateKey);
+
+  return db.runTransaction(async (tx) => {
+    const dailySnap = await tx.get(dailyDataRef);
+    const changeCounts = (dailySnap.exists && dailySnap.data().nudgeChangeCount) || {};
+    const used = changeCounts[accountId] || 0;
+
+    if (used >= MAX_NUDGE_CHANGES_PER_DAY) {
+      return {ok: false, reason: "limit_reached", remaining: 0};
+    }
+
+    const childWindows = await getChildNudgeWindows(db, familyId);
+    const screenTimeRatio = await getScreenTimeRatio(db, familyId, dateKey);
+    const newPrompt = await pickPromptForAccount(
+        db, familyId, accountId, nudge.deliveryWindow,
+        {
+          ageGroup: childWindows.ageGroup,
+          familyGoals: childWindows.familyGoals,
+          screenTimeRatio,
+        },
+    );
+
+    if (!newPrompt) {
+      return {
+        ok: false,
+        reason: "no_prompt_available",
+        remaining: MAX_NUDGE_CHANGES_PER_DAY - used,
+      };
+    }
+
+    tx.update(nudgeRef, {
+      prompt: newPrompt.text,
+      promptText: newPrompt.text,
+      promptId: newPrompt.id,
+      promptCategory: newPrompt.category,
+      promptVariant: newPrompt.variant,
+      promptSource: newPrompt.source,
+      promptGenerationMode: "library",
+      changedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    tx.set(dailyDataRef, {
+      nudgeChangeCount: {...changeCounts, [accountId]: used + 1},
+    }, {merge: true});
+
+    return {
+      ok: true,
+      remaining: MAX_NUDGE_CHANGES_PER_DAY - (used + 1),
+      prompt: newPrompt.text,
+    };
+  });
+});
 
 console.log("index.js finished loading");

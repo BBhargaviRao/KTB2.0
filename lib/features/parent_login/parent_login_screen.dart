@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+import 'package:ktb2/widgets/audio_play_button.dart';
 
 class ParentLoginScreen extends StatefulWidget {
   final String parentName;
@@ -20,6 +22,22 @@ class ParentLoginScreen extends StatefulWidget {
 
 class _ParentLoginScreenState extends State<ParentLoginScreen> {
   final Map<String, TextEditingController> _controllers = {};
+
+  // Streams are created ONCE (lazily, on first read) rather than fresh
+  // inline on every build (as `stream: _pendingParentStream()` used to be).
+  // _pendingParentStream() bounds its query with Timestamp.now(), so calling
+  // it fresh on every rebuild produced a genuinely NEW query each time —
+  // and ANY rebuild of this screen (e.g. the keyboard opening, which
+  // changes MediaQuery viewInsets and this screen reads MediaQuery.of
+  // higher up) made StreamBuilder tear down and resubscribe, destroying the
+  // answer TextField's focus/keyboard the instant it tried to appear. Same
+  // fix already applied once in session_tab.dart's _stream for the same reason.
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _pendingParentStreamCached =
+      _pendingParentStream();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _answeredParentStreamCached =
+      _answeredParentStream();
+  late final Stream<QuerySnapshot<Map<String, dynamic>>> _childNudgesStreamCached =
+      _childNudgesStream();
 
   Future<void> _markNudgeOpened(String familyId, String nudgeId) async {
     final nudgeRef = FirebaseFirestore.instance
@@ -67,23 +85,29 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
           .collection('families').doc(widget.familyId)
           .collection('settings').doc('nudges');
 
-  Future<void> _showNudgeWindowDialog(BuildContext context) async {
+  Future<void> _showChildDetailsDialog(BuildContext context) async {
     final doc = await _nudgeSettingsRef().get();
     final data = doc.data();
     final w1 = data?['childWindow1'] as Map<String, dynamic>?;
     final w2 = data?['childWindow2'] as Map<String, dynamic>?;
+    final age = data?['childAge'] as int?;
+    final goals = (data?['familyGoals'] as List<dynamic>?)?.cast<String>() ?? const [];
 
     if (!context.mounted) return;
     showDialog(
       context: context,
       barrierColor: Colors.black.withOpacity(0.45),
-      builder: (_) => _NudgeWindowDialog(
+      builder: (_) => _ChildDetailsDialog(
+        initialAge: age ?? 8,
+        initialGoals: goals,
         initialWindow1Start: w1?['startHour'] as int? ?? 15,
         initialWindow1End: w1?['endHour'] as int? ?? 17,
         initialWindow2Start: w2?['startHour'] as int? ?? 18,
         initialWindow2End: w2?['endHour'] as int? ?? 20,
-        onSave: (w1Start, w1End, w2Start, w2End) async {
+        onSave: (age, goals, w1Start, w1End, w2Start, w2End) async {
           await _nudgeSettingsRef().set({
+            'childAge': age,
+            'familyGoals': goals,
             'childWindow1': {'startHour': w1Start, 'endHour': w1End},
             'childWindow2': {'startHour': w2Start, 'endHour': w2End},
             'updatedAt': FieldValue.serverTimestamp(),
@@ -396,6 +420,18 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     return null;
   }
 
+  // Sibling of _extractResponseText for a voice-recorded answer.
+  ({String url, int? durationSeconds})? _extractResponseAudio(Map<String, dynamic> data) {
+    final resp = data['response'];
+    if (resp is Map && resp['type'] == 'audio') {
+      final url = resp['audioUrl'];
+      if (url is String && url.isNotEmpty) {
+        return (url: url, durationSeconds: (resp['audioDurationSeconds'] as num?)?.toInt());
+      }
+    }
+    return null;
+  }
+
   Widget _buildParentPendingCardFromDoc(
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -407,6 +443,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     });
 
     final prompt = (data['prompt'] ?? '') as String;
+    final conversationStarter = data['conversationStarter'] as String?;
     final scheduledAt = _scheduledForAsDate(data);
     final createdLabel = _formatScheduledLabel(scheduledAt);
     final dayTag = _relativeDayTag(scheduledAt);
@@ -414,10 +451,16 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     final ctrl = _controllers.putIfAbsent(doc.id, () => TextEditingController());
 
     return _NudgeCard(
+      key: ValueKey(doc.id),
+      familyId: widget.familyId,
+      accountId: widget.parentAccountId,
+      nudgeId: nudgeId,
+      dateKey: (data['dateKey'] as String?) ?? '',
       question: prompt,
       createdAtLabel: createdLabel,
       dayTag: dayTag,
       controller: ctrl,
+      conversationStarter: conversationStarter,
       onSave: () async {
         final answer = ctrl.text.trim();
         if (answer.isEmpty) return;
@@ -463,10 +506,12 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     final answerText = _extractResponseText(data);
 
     return _ReadOnlyAnswerCard(
+      key: ValueKey(doc.id),
       question: prompt,
       createdAtLabel: createdLabel,
       dayTag: dayTag,
       answerText: answerText,
+      conversationStarter: data['conversationStarter'] as String?,
     );
   }
 
@@ -483,9 +528,11 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
     final shareWithParent = data['shareWithParent'] == true;
 
     String? answerToShow;
+    ({String url, int? durationSeconds})? audioToShow;
     if (status == 'answered' && shareWithParent) {
       final text = _extractResponseText(data);
       if (text != null) answerToShow = text;
+      audioToShow = _extractResponseAudio(data);
     }
 
     String privacyLine;
@@ -493,8 +540,8 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
       privacyLine = 'Not answered yet.';
     } else if (!shareWithParent) {
       privacyLine = 'Answer not shared.';
-    } else if (answerToShow == null) {
-      privacyLine = 'Shared, but no answer text found.';
+    } else if (answerToShow == null && audioToShow == null) {
+      privacyLine = 'Shared, but no answer found.';
     } else {
       privacyLine = 'Shared by child';
     }
@@ -504,6 +551,8 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
       createdAtLabel: createdLabel,
       dayTag: dayTag,
       answerText: answerToShow,
+      audioUrl: audioToShow?.url,
+      audioDurationSeconds: audioToShow?.durationSeconds,
       privacyLine: privacyLine,
       emotionEmoji: data['emotionEmoji'] as String?,
       cardColors: _cardColors,
@@ -606,9 +655,9 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                     child: SizedBox(
                       width: double.infinity,
                       child: ElevatedButton(
-                      onPressed: () => _showNudgeWindowDialog(context),
+                      onPressed: () => _showChildDetailsDialog(context),
                       child: const Text(
-                        'Set Delivery for Child',
+                        'Set Child Details',
                         style: TextStyle(
                           fontFamily: 'PlusJakartaSans',
                           fontSize: 14,
@@ -637,7 +686,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                     builder: (context) {
                       if (_showChildNudges) {
                         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                          stream: _childNudgesStream(),
+                          stream: _childNudgesStreamCached,
                           builder: (context, snapshot) {
                             if (snapshot.hasError) {
                               return Text('Error: ${snapshot.error}');
@@ -686,7 +735,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
 
                       if (showPending && !showAnswered) {
                         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                          stream: _pendingParentStream(),
+                          stream: _pendingParentStreamCached,
                           builder: (context, snapshot) {
                             if (snapshot.hasError) {
                               return Text('Error: ${snapshot.error}');
@@ -726,7 +775,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
 
                       if (!showPending && showAnswered) {
                         return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                          stream: _answeredParentStream(),
+                          stream: _answeredParentStreamCached,
                           builder: (context, snapshot) {
                             if (snapshot.hasError) {
                               return Text('Error: ${snapshot.error}');
@@ -765,7 +814,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                       }
 
                       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                        stream: _pendingParentStream(),
+                        stream: _pendingParentStreamCached,
                         builder: (context, pendingSnap) {
                           if (pendingSnap.hasError) {
                             return Text('Error: ${pendingSnap.error}');
@@ -781,7 +830,7 @@ class _ParentLoginScreenState extends State<ParentLoginScreen> {
                           }
 
                           return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-                            stream: _answeredParentStream(),
+                            stream: _answeredParentStreamCached,
                             builder: (context, answeredSnap) {
                               if (answeredSnap.hasError) {
                                 return Text('Error: ${answeredSnap.error}');
@@ -872,17 +921,31 @@ class _DayTagPill extends StatelessWidget {
   }
 }
 
-class _NudgeCard extends StatelessWidget {
+class _NudgeCard extends StatefulWidget {
+  final String familyId;
+  final String accountId;
+  final String nudgeId;
+  final String dateKey;
   final String question;
   final String createdAtLabel;
   final String? dayTag;
   final TextEditingController controller;
   final VoidCallback onSave;
+  // Conversation Starter Mode: a simple in-person follow-up bundled onto
+  // this same nudge (not a separate 3rd notification), generated from the
+  // child's most recent answer. Null on most nudges — only parent_evening
+  // nudges that had a fresh child response to draw from will have one.
+  final String? conversationStarter;
 
   final List<Color> cardColors;
   final List<double> cardStops;
 
   const _NudgeCard({
+    super.key,
+    required this.familyId,
+    required this.accountId,
+    required this.nudgeId,
+    required this.dateKey,
     required this.question,
     required this.createdAtLabel,
     required this.dayTag,
@@ -890,8 +953,14 @@ class _NudgeCard extends StatelessWidget {
     required this.onSave,
     required this.cardColors,
     required this.cardStops,
+    this.conversationStarter,
   });
 
+  @override
+  State<_NudgeCard> createState() => _NudgeCardState();
+}
+
+class _NudgeCardState extends State<_NudgeCard> {
   static const TextStyle _qaStyle = TextStyle(
     fontFamily: 'PlusJakartaSans',
     fontSize: 22,
@@ -911,8 +980,56 @@ class _NudgeCard extends StatelessWidget {
     height: 1.25,
   );
 
+  // dateKey is fixed for the lifetime of this card (a nudge never changes
+  // which day it belongs to), so a plain `late final` is safe here — unlike
+  // the dashboard widget's version, this stream never needs invalidating.
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _dailyDataStream =
+      FirebaseFirestore.instance
+          .collection('families').doc(widget.familyId)
+          .collection('dailyData').doc(widget.dateKey)
+          .snapshots();
+  bool _changingQuestion = false;
+
+  Future<void> _changeQuestion() async {
+    setState(() => _changingQuestion = true);
+    try {
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('changeNudgePrompt')
+          .call({
+        'familyId': widget.familyId,
+        'accountId': widget.accountId,
+        'nudgeId': widget.nudgeId,
+      });
+      final data = Map<String, dynamic>.from(result.data as Map);
+      if (data['ok'] != true && mounted) {
+        final reason = data['reason'] as String?;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(reason == 'limit_reached'
+              ? "You've used all your question changes for today"
+              : "Couldn't change the question right now"),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Error: $e'), behavior: SnackBarBehavior.floating));
+      }
+    } finally {
+      if (mounted) setState(() => _changingQuestion = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final question = widget.question;
+    final createdAtLabel = widget.createdAtLabel;
+    final dayTag = widget.dayTag;
+    final controller = widget.controller;
+    final onSave = widget.onSave;
+    final conversationStarter = widget.conversationStarter;
+    final cardColors = widget.cardColors;
+    final cardStops = widget.cardStops;
     return Center(
       child: ConstrainedBox(
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.shortestSide >= 600 ? 720 : 520),
@@ -946,7 +1063,42 @@ class _NudgeCard extends StatelessWidget {
                 textAlign: TextAlign.left,
                 style: _qaStyle,
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
+              StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: _dailyDataStream,
+                builder: (context, snap) {
+                  final counts = snap.data?.data()?['nudgeChangeCount'] as Map<String, dynamic>?;
+                  final used = (counts?[widget.accountId] as int?) ?? 0;
+                  final remaining = (3 - used).clamp(0, 3);
+                  final canChange = remaining > 0 && !_changingQuestion;
+                  return Align(
+                    alignment: Alignment.centerRight,
+                    child: ElevatedButton.icon(
+                      onPressed: canChange ? _changeQuestion : null,
+                      icon: _changingQuestion
+                          ? const SizedBox(width: 13, height: 13,
+                              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                          : const Icon(Icons.shuffle_rounded, size: 15),
+                      label: Text(
+                        remaining > 0 ? 'Change ($remaining left)' : 'No changes left',
+                        style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 11, fontWeight: FontWeight.w700),
+                      ),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: canChange ? Colors.black87 : Colors.black26,
+                        foregroundColor: Colors.white,
+                        disabledBackgroundColor: Colors.black26,
+                        disabledForegroundColor: Colors.white70,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 8),
               Container(
                 width: double.infinity,
                 padding: const EdgeInsets.all(14),
@@ -972,6 +1124,29 @@ class _NudgeCard extends StatelessWidget {
                   ),
                 ),
               ),
+              if (conversationStarter != null && conversationStarter!.trim().isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.5),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('💬 Ask in person tonight',
+                          style: TextStyle(fontFamily: 'PlusJakartaSans',
+                              fontWeight: FontWeight.w700, fontSize: 12, color: Colors.black87)),
+                      const SizedBox(height: 4),
+                      Text(conversationStarter!,
+                          style: const TextStyle(fontFamily: 'PlusJakartaSans',
+                              fontSize: 13, color: Colors.black87)),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 18),
               SizedBox(
                 width: double.infinity,
@@ -1037,6 +1212,8 @@ class _ReadOnlyNudgeCard extends StatelessWidget {
   final String createdAtLabel;
   final String? dayTag;
   final String? answerText;
+  final String? audioUrl;
+  final int? audioDurationSeconds;
   final String privacyLine;
   final String? emotionEmoji;
 
@@ -1048,6 +1225,8 @@ class _ReadOnlyNudgeCard extends StatelessWidget {
     required this.createdAtLabel,
     required this.dayTag,
     required this.answerText,
+    this.audioUrl,
+    this.audioDurationSeconds,
     required this.privacyLine,
     required this.emotionEmoji,
     required this.cardColors,
@@ -1132,7 +1311,10 @@ class _ReadOnlyNudgeCard extends StatelessWidget {
                   color: Colors.black.withOpacity(0.70),
                 ),
               ),
-              if (answerText != null) ...[
+              if (audioUrl != null) ...[
+                const SizedBox(height: 10),
+                AudioPlayButton(audioUrl: audioUrl!, durationSeconds: audioDurationSeconds),
+              ] else if (answerText != null) ...[
                 const SizedBox(height: 10),
                 Text(
                   answerText!,
@@ -1165,12 +1347,15 @@ class _ReadOnlyAnswerCard extends StatelessWidget {
   final String createdAtLabel;
   final String? dayTag;
   final String? answerText;
+  final String? conversationStarter;
 
   const _ReadOnlyAnswerCard({
+    super.key,
     required this.question,
     required this.createdAtLabel,
     required this.dayTag,
     required this.answerText,
+    this.conversationStarter,
   });
 
   static const TextStyle _qaStyle = TextStyle(
@@ -1250,6 +1435,29 @@ class _ReadOnlyAnswerCard extends StatelessWidget {
                 answerText ?? '(No answer text found)',
                 style: _answerStyle,
               ),
+              if (conversationStarter != null && conversationStarter!.trim().isNotEmpty) ...[
+                const SizedBox(height: 14),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withOpacity(0.04),
+                    borderRadius: BorderRadius.circular(18),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('💬 Ask in person tonight',
+                          style: TextStyle(fontFamily: 'PlusJakartaSans',
+                              fontWeight: FontWeight.w700, fontSize: 12, color: Colors.black87)),
+                      const SizedBox(height: 4),
+                      Text(conversationStarter!,
+                          style: const TextStyle(fontFamily: 'PlusJakartaSans',
+                              fontSize: 13, color: Colors.black87)),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 12),
               Center(
                 child: Text(
@@ -1271,19 +1479,40 @@ class _ReadOnlyAnswerCard extends StatelessWidget {
   }
 }
 
-// ── Nudge delivery window dialog ──────────────────────────────────────────
-// Lets the parent pick a 2-hour delivery window for each of the child's two
-// daily nudges. Persisted to families/{familyId}/settings/nudges and read by
-// the generateDailyNudges Cloud Function (childWindow1/childWindow2), so it
-// stays in effect until the parent changes it again.
-class _NudgeWindowDialog extends StatefulWidget {
+// Predefined family goals — kept as a fixed short list (rather than free
+// text) so the adaptive nudge selection (GOAL_CATEGORY_MAP in
+// functions/index.js) can reliably map each one to a question category.
+// Max 2 selectable, enforced in the dialog below.
+const List<Map<String, String>> kFamilyGoalOptions = [
+  {'key': 'less_gaming', 'label': 'Less gaming / more balance'},
+  {'key': 'wind_down', 'label': 'Better sleep & calmer evenings'},
+  {'key': 'more_connection', 'label': 'More real connection, less comparison'},
+  {'key': 'more_creativity', 'label': 'More creativity & learning'},
+  {'key': 'more_reflection', 'label': 'More self-awareness'},
+];
+
+// ── Child details dialog ───────────────────────────────────────────────────
+// Lets the parent set their child's age (drives which age-tiered question
+// bank is used), up to 2 family goals (mildly biases question selection),
+// and a 2-hour delivery window for each of the child's two daily nudges.
+// Persisted to families/{familyId}/settings/nudges and read by the
+// generateDailyNudges Cloud Function, so it stays in effect until changed.
+class _ChildDetailsDialog extends StatefulWidget {
+  final int initialAge;
+  final List<String> initialGoals;
   final int initialWindow1Start;
   final int initialWindow1End;
   final int initialWindow2Start;
   final int initialWindow2End;
-  final Future<void> Function(int w1Start, int w1End, int w2Start, int w2End) onSave;
+  final Future<void> Function(
+    int age,
+    List<String> goals,
+    int w1Start, int w1End, int w2Start, int w2End,
+  ) onSave;
 
-  const _NudgeWindowDialog({
+  const _ChildDetailsDialog({
+    required this.initialAge,
+    required this.initialGoals,
     required this.initialWindow1Start,
     required this.initialWindow1End,
     required this.initialWindow2Start,
@@ -1292,10 +1521,10 @@ class _NudgeWindowDialog extends StatefulWidget {
   });
 
   @override
-  State<_NudgeWindowDialog> createState() => _NudgeWindowDialogState();
+  State<_ChildDetailsDialog> createState() => _ChildDetailsDialogState();
 }
 
-class _NudgeWindowDialogState extends State<_NudgeWindowDialog> {
+class _ChildDetailsDialogState extends State<_ChildDetailsDialog> {
   static const _purple = Color(0xFF7C6FCD);
   static const _purpleLight = Color(0xFFEDE9FF);
 
@@ -1308,11 +1537,14 @@ class _NudgeWindowDialogState extends State<_NudgeWindowDialog> {
   late String _period1; // 'AM' | 'PM'
   late int _hour12_2;
   late String _period2;
+  late int _age;
+  late Set<String> _selectedGoals;
 
   bool _saving = false;
 
   static const List<String> _hours = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12'];
   static const List<String> _periods = ['AM', 'PM'];
+  static const List<int> _ages = [6, 7, 8, 9, 10, 11];
 
   @override
   void initState() {
@@ -1321,11 +1553,29 @@ class _NudgeWindowDialogState extends State<_NudgeWindowDialog> {
     _period1 = widget.initialWindow1Start < 12 ? 'AM' : 'PM';
     _hour12_2 = _hour12From24(widget.initialWindow2Start);
     _period2 = widget.initialWindow2Start < 12 ? 'AM' : 'PM';
+    _age = widget.initialAge.clamp(6, 11);
+    _selectedGoals = widget.initialGoals.toSet();
 
     _hourCtrl1 = FixedExtentScrollController(initialItem: _hour12_1 - 1);
     _periodCtrl1 = FixedExtentScrollController(initialItem: _period1 == 'AM' ? 0 : 1);
     _hourCtrl2 = FixedExtentScrollController(initialItem: _hour12_2 - 1);
     _periodCtrl2 = FixedExtentScrollController(initialItem: _period2 == 'AM' ? 0 : 1);
+  }
+
+  void _toggleGoal(String key) {
+    setState(() {
+      if (_selectedGoals.contains(key)) {
+        _selectedGoals.remove(key);
+      } else if (_selectedGoals.length < 2) {
+        _selectedGoals.add(key);
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('You can pick up to 2 goals'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    });
   }
 
   @override
@@ -1364,7 +1614,7 @@ class _NudgeWindowDialogState extends State<_NudgeWindowDialog> {
     final w1End = (w1Start + 2).clamp(0, 24);
     final w2End = (w2Start + 2).clamp(0, 24);
     try {
-      await widget.onSave(w1Start, w1End, w2Start, w2End);
+      await widget.onSave(_age, _selectedGoals.toList(), w1Start, w1End, w2Start, w2End);
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (mounted) {
@@ -1470,7 +1720,7 @@ class _NudgeWindowDialogState extends State<_NudgeWindowDialog> {
           children: [
             Row(
               children: [
-                const Expanded(child: Text('Nudge Delivery Windows',
+                const Expanded(child: Text('Child Details',
                     style: TextStyle(fontFamily: 'InstrumentSerif', fontSize: 24, color: _purple))),
                 IconButton(
                   icon: const Icon(Icons.close, color: _purple),
@@ -1480,9 +1730,53 @@ class _NudgeWindowDialogState extends State<_NudgeWindowDialog> {
             ),
             const SizedBox(height: 4),
             const Text(
-              "Choose a 2-hour window for each of your child's daily nudges. "
-              'This stays in effect until you change it again.',
+              "Your child's age picks the right question wording for their "
+              'nudges. Goals and delivery windows stay in effect until you '
+              'change them again.',
               style: TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 12, color: Colors.black54),
+            ),
+            const SizedBox(height: 20),
+            const Text('Child\'s age', style: TextStyle(
+              fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w700, fontSize: 15, color: _purple)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8, runSpacing: 8,
+              children: _ages.map((a) {
+                final selected = a == _age;
+                return ChoiceChip(
+                  label: Text('$a'),
+                  selected: selected,
+                  onSelected: (_) => setState(() => _age = a),
+                  selectedColor: _purple,
+                  backgroundColor: _purpleLight,
+                  labelStyle: TextStyle(
+                    fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600,
+                    color: selected ? Colors.white : _purple,
+                  ),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 20),
+            const Text('Family goals (pick up to 2)', style: TextStyle(
+              fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w700, fontSize: 15, color: _purple)),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8, runSpacing: 8,
+              children: kFamilyGoalOptions.map((goal) {
+                final key = goal['key']!;
+                final selected = _selectedGoals.contains(key);
+                return ChoiceChip(
+                  label: Text(goal['label']!),
+                  selected: selected,
+                  onSelected: (_) => _toggleGoal(key),
+                  selectedColor: _purple,
+                  backgroundColor: _purpleLight,
+                  labelStyle: TextStyle(
+                    fontFamily: 'PlusJakartaSans', fontWeight: FontWeight.w600, fontSize: 12,
+                    color: selected ? Colors.white : _purple,
+                  ),
+                );
+              }).toList(),
             ),
             const SizedBox(height: 20),
             _buildWindowPicker(

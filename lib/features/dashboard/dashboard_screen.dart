@@ -3,12 +3,17 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 import 'package:ktb2/features/parent_login/parent_login_screen.dart';
 import 'package:ktb2/features/child_login/child_login_screen.dart';
 import 'package:ktb2/features/dashboard/session_tab.dart';
-import 'package:ktb2/features/home/home_screen.dart' show maybePromptToSaveLogin;
+import 'package:ktb2/features/home/home_screen.dart'
+    show maybePromptToSaveLogin;
 import 'package:ktb2/services/notification_service.dart';
 import 'package:ktb2/services/usage_stats_service.dart';
+import 'package:ktb2/services/audio_upload_service.dart';
+import 'package:ktb2/widgets/audio_recorder_field.dart';
+import 'package:ktb2/widgets/audio_play_button.dart';
 
 // ── Task model ────────────────────────────────────────────────────────────────
 
@@ -75,7 +80,8 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   int _selectedTab = 0;
   DateTime _selectedDate = _todayDate();
 
@@ -163,20 +169,24 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       final dateKey = _dateKey(_todayDate());
       final agMins = await UsageStatsService.getAppGroupMinutes(dateKey);
 
-      if (agMins > 0 && (agMins > _firestoreScreenTimeMinutes || !_extensionHasFired)) {
+      if (agMins > 0 &&
+          (agMins > _firestoreScreenTimeMinutes || !_extensionHasFired)) {
         // Extension fired — always prefer this over wall-clock relay.
         _extensionHasFired = true;
         FirebaseFirestore.instance
-            .collection('families').doc(widget.familyId)
-            .collection('dashboard_days').doc(dateKey)
+            .collection('families')
+            .doc(widget.familyId)
+            .collection('dashboard_days')
+            .doc(dateKey)
             .set({
-              'screenTimeUsedMinutes': agMins,
-              'screenTimeLastUpdatedAt': FieldValue.serverTimestamp(),
-            }, SetOptions(merge: true));
-        if (mounted) setState(() {
-          _firestoreScreenTimeMinutes = agMins;
-          _nativeSessionMinutes = agMins;
-        });
+          'screenTimeUsedMinutes': agMins,
+          'screenTimeLastUpdatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+        if (mounted)
+          setState(() {
+            _firestoreScreenTimeMinutes = agMins;
+            _nativeSessionMinutes = agMins;
+          });
         return;
       }
 
@@ -200,10 +210,13 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   List<AppUsageEntry> get _activeEntries =>
-      (widget.role == 'parent' && _showChildUsage) ? _childUsageEntries : _usageEntries;
+      (widget.role == 'parent' && _showChildUsage)
+          ? _childUsageEntries
+          : _usageEntries;
 
-  bool get _activeLoading =>
-      (widget.role == 'parent' && _showChildUsage) ? _childUsageLoading : _usageLoading;
+  bool get _activeLoading => (widget.role == 'parent' && _showChildUsage)
+      ? _childUsageLoading
+      : _usageLoading;
 
   // Cached streams — prevent stream recreation on every rebuild
   Stream<DocumentSnapshot<Map<String, dynamic>>>? _todosStream;
@@ -211,6 +224,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   late final Stream<DocumentSnapshot<Map<String, dynamic>>> _settingsStream;
   Stream<DocumentSnapshot<Map<String, dynamic>>>? _dashDayStream;
   String? _dashDayStreamKey;
+  // Own account doc — avatar/theme/streak for child customization.
+  late final Stream<DocumentSnapshot<Map<String, dynamic>>> _selfAccountStream;
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _selfAccountSub;
+  Color? _childThemeColor;
 
   // For cross-device todo notifications
   Timestamp? _lastKnownTodosUpdatedAt;
@@ -229,21 +246,28 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // Per-account daily data (mood only — child's own mood)
   DocumentReference<Map<String, dynamic>> _dailyRef(String dateKey) =>
       FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('accounts').doc(widget.accountId)
-          .collection('dailyData').doc(dateKey);
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('accounts')
+          .doc(widget.accountId)
+          .collection('dailyData')
+          .doc(dateKey);
 
   // Family-shared daily data (todos — visible to both parent and child)
   DocumentReference<Map<String, dynamic>> _familyDailyRef(String dateKey) =>
       FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('dailyData').doc(dateKey);
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('dailyData')
+          .doc(dateKey);
 
   // Family-level settings (screen time limit set by parent)
   DocumentReference<Map<String, dynamic>> _familySettingsRef() =>
       FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('settings').doc('screenTime');
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('settings')
+          .doc('screenTime');
 
   // Runs once per day (whichever role opens the app first): if today's
   // dailyData doc has no todos yet, carry forward yesterday's unfinished
@@ -255,7 +279,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       final todayDoc = await _familyDailyRef(todayKey).get();
       if (todayDoc.exists && todayDoc.data()?['todos'] != null) return;
 
-      final yesterdayKey = _dateKey(_todayDate().subtract(const Duration(days: 1)));
+      final yesterdayKey =
+          _dateKey(_todayDate().subtract(const Duration(days: 1)));
       final yestDoc = await _familyDailyRef(yesterdayKey).get();
       final raw = yestDoc.data()?['todos'] as List<dynamic>?;
       final carried = (raw ?? [])
@@ -277,7 +302,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
       if (carried.isNotEmpty) {
         await FirebaseFirestore.instance
-            .collection('families').doc(widget.familyId)
+            .collection('families')
+            .doc(widget.familyId)
             .collection('notifications')
             .add({
           'title': 'Unfinished tasks carried over',
@@ -292,7 +318,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   // Returns a cached todos stream — avoids resubscription on every widget rebuild
-  Stream<DocumentSnapshot<Map<String, dynamic>>> _getTodosStream(String dateKey) {
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _getTodosStream(
+      String dateKey) {
     if (_todosStreamDateKey != dateKey || _todosStream == null) {
       _todosStreamDateKey = dateKey;
       _todoStreamInitialized = false; // reset cross-device tracker for new date
@@ -303,12 +330,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   // Returns a cached dashboard_days stream — avoids re-subscription on every rebuild
-  Stream<DocumentSnapshot<Map<String, dynamic>>>? _getDashDayStream(String todayKey) {
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _getDashDayStream(
+      String todayKey) {
     if (_dashDayStreamKey != todayKey || _dashDayStream == null) {
       _dashDayStreamKey = todayKey;
       _dashDayStream = FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('dashboard_days').doc(todayKey)
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('dashboard_days')
+          .doc(todayKey)
           .snapshots();
     }
     return _dashDayStream;
@@ -319,14 +349,33 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _settingsStream = _familySettingsRef().snapshots();
+    _selfAccountStream = FirebaseFirestore.instance
+        .collection('families')
+        .doc(widget.familyId)
+        .collection('accounts')
+        .doc(widget.accountId)
+        .snapshots();
+    if (widget.role == 'child') {
+      _selfAccountSub = _selfAccountStream.listen((snap) {
+        if (!mounted) return;
+        final c = _colorFromHex(snap.data()?['themeColor'] as String?);
+        if (c != _childThemeColor) setState(() => _childThemeColor = c);
+      });
+    }
     Future.microtask(_loadInitialData);
     final pendingCode = widget.pendingSaveLoginFamilyCode;
-    final pendingPin  = widget.pendingSaveLoginPin;
+    final pendingPin = widget.pendingSaveLoginPin;
     if (pendingCode != null && pendingPin != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
-          maybePromptToSaveLogin(context, familyCode: pendingCode, pin: pendingPin);
+          maybePromptToSaveLogin(context,
+              familyCode: pendingCode, pin: pendingPin);
         }
+      });
+    }
+    if (widget.role == 'parent') {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _maybePromptChildAge();
       });
     }
     _usageRefreshTimer = Timer.periodic(const Duration(minutes: 1), (_) {
@@ -345,7 +394,78 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     WidgetsBinding.instance.removeObserver(this);
     _usageRefreshTimer?.cancel();
     _sessionPollTimer?.cancel();
+    _selfAccountSub?.cancel();
     super.dispose();
+  }
+
+  // First-login-only: asks which age bracket the child is in, so nudges use
+  // appropriately worded questions from the start. Purely a convenience
+  // prompt — like the saved-login one, it must never block reaching the
+  // dashboard, so it's fully defensive and skippable (defaults to the
+  // middle bracket rather than leaving childAge unset if skipped).
+  Future<void> _maybePromptChildAge() async {
+    try {
+      final ref = FirebaseFirestore.instance
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('settings')
+          .doc('nudges');
+      final doc = await ref.get();
+      if (doc.data()?['childAge'] != null || !mounted) return;
+
+      int selected = 8;
+      final confirmed = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => StatefulBuilder(
+          builder: (ctx, setDialogState) => AlertDialog(
+            title: const Text('How old is your child?'),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  "This picks the right question wording for their nudges. "
+                  'You can change it anytime from Set Child Details.',
+                  style: TextStyle(fontSize: 13),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [6, 7, 8, 9, 10, 11].map((a) {
+                    final sel = a == selected;
+                    return ChoiceChip(
+                      label: Text('$a'),
+                      selected: sel,
+                      onSelected: (_) => setDialogState(() => selected = a),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Skip for now'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: const Text('Save'),
+              ),
+            ],
+          ),
+        ),
+      );
+
+      await ref.set({
+        'childAge': confirmed == true ? selected : 8,
+        'updatedAt': FieldValue.serverTimestamp(),
+        'updatedByRole': 'parent',
+        'updatedByAccountId': widget.accountId,
+      }, SetOptions(merge: true));
+    } catch (e) {
+      print('KTB: _maybePromptChildAge failed (non-fatal): $e');
+    }
   }
 
   // Refresh the session bar immediately when the child switches back to KTB
@@ -402,8 +522,12 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     if (!mounted) return;
 
     if (entries.isNotEmpty) {
-      setState(() { _usageEntries = entries; _usageLoading = false; });
-      if (widget.role == 'child' && _dateKey(date) == _dateKey(DateTime.now())) {
+      setState(() {
+        _usageEntries = entries;
+        _usageLoading = false;
+      });
+      if (widget.role == 'child' &&
+          _dateKey(date) == _dateKey(DateTime.now())) {
         await _uploadUsageToFirestore(date, entries);
       }
     } else {
@@ -412,21 +536,32 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       final dateKey = _dateKey(date);
       try {
         final doc = await FirebaseFirestore.instance
-            .collection('families').doc(widget.familyId)
-            .collection('accounts').doc(widget.accountId)
-            .collection('usageStats').doc(dateKey)
+            .collection('families')
+            .doc(widget.familyId)
+            .collection('accounts')
+            .doc(widget.accountId)
+            .collection('usageStats')
+            .doc(dateKey)
             .get();
         final raw = doc.data()?['apps'] as List<dynamic>?;
-        final saved = raw?.map((a) {
-          final m = Map<String, dynamic>.from(a as Map);
-          return AppUsageEntry(
-            packageName:   m['packageName']   as String? ?? '',
-            appName:       m['appName']       as String? ?? '',
-            categoryLabel: m['categoryLabel'] as String? ?? 'Other',
-            timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
-          );
-        }).where((e) => e.timeMinutes > 0).toList() ?? [];
-        if (mounted) setState(() { _usageEntries = saved; _usageLoading = false; });
+        final saved = raw
+                ?.map((a) {
+                  final m = Map<String, dynamic>.from(a as Map);
+                  return AppUsageEntry(
+                    packageName: m['packageName'] as String? ?? '',
+                    appName: m['appName'] as String? ?? '',
+                    categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+                    timeMinutes: (m['timeMinutes'] as num?)?.toInt() ?? 0,
+                  );
+                })
+                .where((e) => e.timeMinutes > 0)
+                .toList() ??
+            [];
+        if (mounted)
+          setState(() {
+            _usageEntries = saved;
+            _usageLoading = false;
+          });
       } catch (_) {
         if (mounted) setState(() => _usageLoading = false);
       }
@@ -437,10 +572,12 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // Writes child's iOS vendorId into the family account doc so parent can look it up.
   void _registerIosVendorId(String vendorId) {
     FirebaseFirestore.instance
-        .collection('families').doc(widget.familyId)
-        .collection('accounts').doc(widget.accountId)
-        .set({'iosVendorId': vendorId}, SetOptions(merge: true))
-        .catchError((_) {});
+        .collection('families')
+        .doc(widget.familyId)
+        .collection('accounts')
+        .doc(widget.accountId)
+        .set({'iosVendorId': vendorId}, SetOptions(merge: true)).catchError(
+            (_) {});
   }
 
   // Loads iOS usage data. Tries the shared keychain first (written by the
@@ -458,35 +595,47 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     final dateKey = _dateKey(date);
     try {
       // Prefer real Screen Time data from keychain (extension writes it).
-      final keychainData = await UsageStatsService.getIosUsageFromKeychain(dateKey);
+      final keychainData =
+          await UsageStatsService.getIosUsageFromKeychain(dateKey);
       if (!mounted) return;
 
       List<AppUsageEntry> entries;
       if (keychainData != null) {
         // Extension's keychain write succeeded — use real category data.
         final rawApps = keychainData['apps'] as List<dynamic>? ?? [];
-        entries = rawApps.map((a) {
-          final m = Map<String, dynamic>.from(a as Map);
-          return AppUsageEntry(
-            packageName:   m['packageName']   as String? ?? '',
-            appName:       m['appName']       as String? ?? '',
-            categoryLabel: m['categoryLabel'] as String? ?? 'Other',
-            timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
-          );
-        }).where((e) => e.timeMinutes > 0).toList();
+        entries = rawApps
+            .map((a) {
+              final m = Map<String, dynamic>.from(a as Map);
+              return AppUsageEntry(
+                packageName: m['packageName'] as String? ?? '',
+                appName: m['appName'] as String? ?? '',
+                categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+                timeMinutes: (m['timeMinutes'] as num?)?.toInt() ?? 0,
+              );
+            })
+            .where((e) => e.timeMinutes > 0)
+            .toList();
         if (entries.isEmpty) {
           final total = (keychainData['totalMinutes'] as num?)?.toInt() ?? 0;
-          entries = [AppUsageEntry(
-            packageName: 'com.apple.total', appName: 'iPad Screen Time',
-            categoryLabel: 'Screen Time', timeMinutes: total)];
+          entries = [
+            AppUsageEntry(
+                packageName: 'com.apple.total',
+                appName: 'iPad Screen Time',
+                categoryLabel: 'Screen Time',
+                timeMinutes: total)
+          ];
         }
       } else {
         // Fallback: foreground-only timer (counts only while KTB app is open).
         final minutes = await UsageStatsService.getIosSessionMinutes(dateKey);
         if (!mounted) return;
-        entries = [AppUsageEntry(
-          packageName: 'com.apple.total', appName: 'iPad Screen Time',
-          categoryLabel: 'Screen Time', timeMinutes: minutes)];
+        entries = [
+          AppUsageEntry(
+              packageName: 'com.apple.total',
+              appName: 'iPad Screen Time',
+              categoryLabel: 'Screen Time',
+              timeMinutes: minutes)
+        ];
       }
 
       setState(() => _usageEntries = entries);
@@ -496,24 +645,31 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   // Reads a past day's iOS usage from Firestore (uploaded each day while live).
-  Future<void> _loadIosPastDayFromFirestore(String vendorId, DateTime date) async {
+  Future<void> _loadIosPastDayFromFirestore(
+      String vendorId, DateTime date) async {
     final dateKey = _dateKey(date);
     try {
       final doc = await FirebaseFirestore.instance
-          .collection('iosDeviceData').doc(vendorId)
-          .collection('usageStats').doc(dateKey)
+          .collection('iosDeviceData')
+          .doc(vendorId)
+          .collection('usageStats')
+          .doc(dateKey)
           .get();
       if (!mounted) return;
       final raw = doc.data()?['apps'] as List<dynamic>?;
-      final entries = raw?.map((a) {
-        final m = Map<String, dynamic>.from(a as Map);
-        return AppUsageEntry(
-          packageName:   m['packageName']   as String? ?? '',
-          appName:       m['appName']       as String? ?? '',
-          categoryLabel: m['categoryLabel'] as String? ?? 'Other',
-          timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
-        );
-      }).where((e) => e.timeMinutes > 0).toList() ?? [];
+      final entries = raw
+              ?.map((a) {
+                final m = Map<String, dynamic>.from(a as Map);
+                return AppUsageEntry(
+                  packageName: m['packageName'] as String? ?? '',
+                  appName: m['appName'] as String? ?? '',
+                  categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+                  timeMinutes: (m['timeMinutes'] as num?)?.toInt() ?? 0,
+                );
+              })
+              .where((e) => e.timeMinutes > 0)
+              .toList() ??
+          [];
       setState(() => _usageEntries = entries);
     } catch (_) {}
   }
@@ -523,24 +679,35 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     final totalMinutes = apps.fold(0, (s, e) => s + e.timeMinutes);
     try {
       await FirebaseFirestore.instance
-          .collection('iosDeviceData').doc(vendorId)
-          .collection('usageStats').doc(dateKey)
+          .collection('iosDeviceData')
+          .doc(vendorId)
+          .collection('usageStats')
+          .doc(dateKey)
           .set({
-            'apps': apps.map((e) => {
-              'packageName': e.packageName,
-              'appName': e.appName,
-              'categoryLabel': e.categoryLabel,
-              'timeMinutes': e.timeMinutes,
-            }).toList(),
-            'totalMinutes': totalMinutes,
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
+        'apps': apps
+            .map((e) => {
+                  'packageName': e.packageName,
+                  'appName': e.appName,
+                  'categoryLabel': e.categoryLabel,
+                  'timeMinutes': e.timeMinutes,
+                })
+            .toList(),
+        'totalMinutes': totalMinutes,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     } catch (_) {}
   }
 
   void _checkLimitReached() {
+    // Only meaningful while a session is actually running — screenTimeLimitMinutes
+    // and dashboard_days.screenTimeUsedMinutes both persist after a session ends
+    // (see notifyOnSessionEnded's reset comment in functions/index.js), so without
+    // this guard a fresh login would re-evaluate stale "limit reached" state and
+    // fire the notification again even when nothing is currently set up.
+    if (_activeSessionStartTime == null) return;
     final todayKey = _dateKey(_todayDate());
-    if (_limitReachedNotifiedDateKey == todayKey) return; // already notified today
+    if (_limitReachedNotifiedDateKey == todayKey)
+      return; // already notified today
     final limit = _lastKnownScreenTimeLimit;
     if (limit == null || limit <= 0) return;
     if (_usedMinutes >= limit) {
@@ -555,23 +722,29 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
   }
 
-  Future<void> _uploadUsageToFirestore(DateTime date, List<AppUsageEntry> entries) async {
+  Future<void> _uploadUsageToFirestore(
+      DateTime date, List<AppUsageEntry> entries) async {
     final totalMinutes = entries.fold(0, (s, e) => s + e.timeMinutes);
     try {
       await FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('accounts').doc(widget.accountId)
-          .collection('usageStats').doc(_dateKey(date))
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('accounts')
+          .doc(widget.accountId)
+          .collection('usageStats')
+          .doc(_dateKey(date))
           .set({
-            'apps': entries.map((e) => {
-              'packageName': e.packageName,
-              'appName': e.appName,
-              'categoryLabel': e.categoryLabel,
-              'timeMinutes': e.timeMinutes,
-            }).toList(),
-            'totalMinutes': totalMinutes,
-            'updatedAt': FieldValue.serverTimestamp(),
-          });
+        'apps': entries
+            .map((e) => {
+                  'packageName': e.packageName,
+                  'appName': e.appName,
+                  'categoryLabel': e.categoryLabel,
+                  'timeMinutes': e.timeMinutes,
+                })
+            .toList(),
+        'totalMinutes': totalMinutes,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
     } catch (e) {
       print('Failed to upload usage stats: $e');
     }
@@ -586,8 +759,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       // Always re-read the child account doc to get the latest iosVendorId —
       // it may have been registered after this parent session started.
       final accountDoc = await FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('accounts').doc(childId)
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('accounts')
+          .doc(childId)
           .get();
       final freshVendorId = accountDoc.data()?['iosVendorId'] as String?;
       if (freshVendorId != null && freshVendorId.isNotEmpty) {
@@ -602,42 +777,52 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       if (_childIosVendorId != null && _childIosVendorId!.isNotEmpty) {
         // iOS child — read from iosDeviceData (uploaded by DeviceActivityReport extension)
         final doc = await FirebaseFirestore.instance
-            .collection('iosDeviceData').doc(_childIosVendorId)
-            .collection('usageStats').doc(_dateKey(date))
+            .collection('iosDeviceData')
+            .doc(_childIosVendorId)
+            .collection('usageStats')
+            .doc(_dateKey(date))
             .get();
         final data = doc.data();
         apps = (data?['apps'] as List<dynamic>?)?.map((a) {
-          final m = Map<String, dynamic>.from(a as Map);
-          return AppUsageEntry(
-            packageName:   m['packageName']   as String? ?? '',
-            appName:       m['appName']       as String? ?? '',
-            categoryLabel: m['categoryLabel'] as String? ?? 'Other',
-            timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
-          );
-        }).toList() ?? [];
+              final m = Map<String, dynamic>.from(a as Map);
+              return AppUsageEntry(
+                packageName: m['packageName'] as String? ?? '',
+                appName: m['appName'] as String? ?? '',
+                categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+                timeMinutes: (m['timeMinutes'] as num?)?.toInt() ?? 0,
+              );
+            }).toList() ??
+            [];
       }
 
       if (apps.isEmpty) {
         // Android child — read from families/.../usageStats/
         final doc = await FirebaseFirestore.instance
-            .collection('families').doc(widget.familyId)
-            .collection('accounts').doc(childId)
-            .collection('usageStats').doc(_dateKey(date))
+            .collection('families')
+            .doc(widget.familyId)
+            .collection('accounts')
+            .doc(childId)
+            .collection('usageStats')
+            .doc(_dateKey(date))
             .get();
         final raw = doc.data()?['apps'] as List<dynamic>?;
         apps = raw?.map((a) {
-          final m = Map<String, dynamic>.from(a as Map);
-          return AppUsageEntry(
-            packageName:   m['packageName']   as String? ?? '',
-            appName:       m['appName']       as String? ?? '',
-            categoryLabel: m['categoryLabel'] as String? ?? 'Other',
-            timeMinutes:   (m['timeMinutes']  as num?)?.toInt() ?? 0,
-          );
-        }).toList() ?? [];
+              final m = Map<String, dynamic>.from(a as Map);
+              return AppUsageEntry(
+                packageName: m['packageName'] as String? ?? '',
+                appName: m['appName'] as String? ?? '',
+                categoryLabel: m['categoryLabel'] as String? ?? 'Other',
+                timeMinutes: (m['timeMinutes'] as num?)?.toInt() ?? 0,
+              );
+            }).toList() ??
+            [];
       }
 
       if (!mounted) return;
-      setState(() { _childUsageEntries = apps; _childUsageLoading = false; });
+      setState(() {
+        _childUsageEntries = apps;
+        _childUsageLoading = false;
+      });
     } catch (_) {
       if (mounted) setState(() => _childUsageLoading = false);
     }
@@ -652,7 +837,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
     try {
       final snap = await FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
+          .collection('families')
+          .doc(widget.familyId)
           .collection('accounts')
           .where('role', isEqualTo: 'child')
           .limit(1)
@@ -671,12 +857,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // Loads mood entries for the week (child only — reads own account)
   Future<void> _loadWeekMoods(DateTime anyDayInWeek) async {
     if (widget.role != 'child') return;
-    final sunday   = anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday % 7));
+    final sunday =
+        anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday % 7));
     final saturday = sunday.add(const Duration(days: 6));
     try {
       final snap = await FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('accounts').doc(widget.accountId)
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('accounts')
+          .doc(widget.accountId)
           .collection('dailyData')
           .where(FieldPath.documentId, isGreaterThanOrEqualTo: _dateKey(sunday))
           .where(FieldPath.documentId, isLessThanOrEqualTo: _dateKey(saturday))
@@ -699,9 +888,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   Future<void> _loadWeekScreenTime() async {
-    final sunday = _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
+    final sunday =
+        _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
     final today = _todayDate();
-    final childAccountId = widget.role == 'child' ? widget.accountId : _childAccountId;
+    final childAccountId =
+        widget.role == 'child' ? widget.accountId : _childAccountId;
     final iosVid = widget.role == 'child' ? _iosVendorId : _childIosVendorId;
 
     final futures = List.generate(7, (i) async {
@@ -712,8 +903,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       if (iosVid != null && iosVid.isNotEmpty) {
         try {
           final doc = await FirebaseFirestore.instance
-              .collection('iosDeviceData').doc(iosVid)
-              .collection('usageStats').doc(key).get();
+              .collection('iosDeviceData')
+              .doc(iosVid)
+              .collection('usageStats')
+              .doc(key)
+              .get();
           final total = doc.data()?['totalMinutes'] as int?;
           if (total != null && total > 0) return MapEntry(key, total);
         } catch (_) {}
@@ -722,9 +916,13 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       if (childAccountId != null) {
         try {
           final doc = await FirebaseFirestore.instance
-              .collection('families').doc(widget.familyId)
-              .collection('accounts').doc(childAccountId)
-              .collection('usageStats').doc(key).get();
+              .collection('families')
+              .doc(widget.familyId)
+              .collection('accounts')
+              .doc(childAccountId)
+              .collection('usageStats')
+              .doc(key)
+              .get();
           final total = doc.data()?['totalMinutes'] as int?;
           if (total != null && total > 0) return MapEntry(key, total);
         } catch (_) {}
@@ -734,17 +932,21 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     });
 
     final results = await Future.wait(futures);
-    if (mounted) setState(() => _weekScreenTimeMinutes = Map.fromEntries(results));
+    if (mounted)
+      setState(() => _weekScreenTimeMinutes = Map.fromEntries(results));
   }
 
   Future<void> _loadParentChartMoods(DateTime anyDayInWeek) async {
     if (widget.role != 'parent' || _childAccountId == null) return;
-    final sunday   = anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday % 7));
+    final sunday =
+        anyDayInWeek.subtract(Duration(days: anyDayInWeek.weekday % 7));
     final saturday = sunday.add(const Duration(days: 6));
     try {
       final snap = await FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('accounts').doc(_childAccountId!)
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('accounts')
+          .doc(_childAccountId!)
           .collection('dailyData')
           .where(FieldPath.documentId, isGreaterThanOrEqualTo: _dateKey(sunday))
           .where(FieldPath.documentId, isLessThanOrEqualTo: _dateKey(saturday))
@@ -771,19 +973,58 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   // ── palette ───────────────────────────────────────────────────────────────
-  static const _bg        = Color(0xFFF0EEF8);
-  static const _textDark  = Color(0xFF1A1A2E);
-  static const _textMid   = Color(0xFF4A4A6A);
+  static const _bg = Color(0xFFF0EEF8);
+  static const _textDark = Color(0xFF1A1A2E);
+  static const _textMid = Color(0xFF4A4A6A);
   static const _textLight = Color(0xFF8A8AAA);
-  static const _barColor  = Color(0xFFB3A9D4);
-  static const _green     = Color(0xFF4A7C59);
+  static const _barColor = Color(0xFFB3A9D4);
+  static const _green = Color(0xFF4A7C59);
 
-  bool   get _isTablet => MediaQuery.of(context).size.shortestSide >= 600;
+  // ── child customization: avatar + theme color ─────────────────────────────
+  static const _kDefaultAvatar = '🦊';
+  static const _kAvatarOptions = [
+    '🦊',
+    '🐼',
+    '🐸',
+    '🦁',
+    '🐵',
+    '🐧',
+    '🦄',
+    '🐨',
+    '🐯',
+    '🐰',
+    '🐶',
+    '🐱',
+  ];
+  static const _kThemeColorOptions = [
+    0xFFB3A9D4,
+    0xFF71B340,
+    0xFF4A90D9,
+    0xFFE8A33D,
+    0xFFE05C7B,
+    0xFF3DBFB0,
+  ];
+
+  Color? _colorFromHex(String? hex) {
+    if (hex == null || hex.isEmpty) return null;
+    final v = int.tryParse(hex, radix: 16);
+    if (v == null) return null;
+    return Color(0xFF000000 | v);
+  }
+
+  // Light, mostly-white tint of the child's chosen theme color — used as the
+  // page background across the dashboard/nudges/session tabs so the color
+  // choice reads as a whole-app accent rather than just decorating the avatar.
+  Color _tintBg(Color c) => Color.alphaBlend(c.withOpacity(0.16), Colors.white);
+
+  bool get _isTablet => MediaQuery.of(context).size.shortestSide >= 600;
   double _s(double phone, double tablet) => _isTablet ? tablet : phone;
 
   void _onTabTapped(int index) => setState(() => _selectedTab = index);
 
-  BoxDecoration _cardDecoration({double elevation = 1, Color color = Colors.white}) => BoxDecoration(
+  BoxDecoration _cardDecoration(
+          {double elevation = 1, Color color = Colors.white}) =>
+      BoxDecoration(
         color: color,
         borderRadius: BorderRadius.circular(_s(18, 24)),
         boxShadow: [
@@ -805,8 +1046,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         selectedDate: _selectedDate,
         onDateSelected: (d) async {
           Navigator.of(context).pop();
-          final prevSunday = _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
-          final newSunday  = d.subtract(Duration(days: d.weekday % 7));
+          final prevSunday =
+              _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
+          final newSunday = d.subtract(Duration(days: d.weekday % 7));
           setState(() => _selectedDate = d);
           if (newSunday != prevSunday) {
             if (widget.role == 'child') await _loadWeekMoods(d);
@@ -832,17 +1074,23 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
     for (final entry in bySession.entries) {
       final sessionRef = FirebaseFirestore.instance
-          .collection('families').doc(widget.familyId)
-          .collection('sessions').doc(entry.key);
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('sessions')
+          .doc(entry.key);
       try {
         await FirebaseFirestore.instance.runTransaction((tx) async {
           final snap = await tx.get(sessionRef);
           if (!snap.exists) return;
-          final tasks = List<dynamic>.from(snap.data()?['tasks'] as List<dynamic>? ?? []);
+          final tasks =
+              List<dynamic>.from(snap.data()?['tasks'] as List<dynamic>? ?? []);
           for (final t in entry.value) {
             final i = t.taskIndex!;
             if (i >= 0 && i < tasks.length) {
-              tasks[i] = {...(tasks[i] as Map<String, dynamic>), 'done': t.done};
+              tasks[i] = {
+                ...(tasks[i] as Map<String, dynamic>),
+                'done': t.done
+              };
             }
           }
           tx.update(sessionRef, {'tasks': tasks});
@@ -883,13 +1131,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             if (t.addedBy.isEmpty) t.addedBy = widget.role;
           }
           _familyDailyRef(dateKey).set({
-            'todos': updated.map((t) => {
-              'text': t.text,
-              'done': t.done,
-              'addedBy': t.addedBy,
-              if (t.sessionId != null) 'sessionId': t.sessionId,
-              if (t.taskIndex != null) 'taskIndex': t.taskIndex,
-            }).toList(),
+            'todos': updated
+                .map((t) => {
+                      'text': t.text,
+                      'done': t.done,
+                      'addedBy': t.addedBy,
+                      if (t.sessionId != null) 'sessionId': t.sessionId,
+                      if (t.taskIndex != null) 'taskIndex': t.taskIndex,
+                    })
+                .toList(),
             'todosUpdatedAt': FieldValue.serverTimestamp(),
             'updatedByRole': widget.role,
             'updatedByAccountId': widget.accountId,
@@ -923,22 +1173,28 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         insetPadding: const EdgeInsets.symmetric(horizontal: 32),
         child: Container(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 16),
-          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(20)),
+          decoration: BoxDecoration(
+              color: Colors.white, borderRadius: BorderRadius.circular(20)),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: emojis.map((e) => GestureDetector(
-              onTap: () {
-                setState(() => _moodEntries[todayKey] = e);
-                _persistMood(todayKey, e);
-                Navigator.of(context).pop();
-              },
-              child: Container(
-                width: 44,
-                height: 44,
-                decoration: const BoxDecoration(color: Color(0xFFF5F3FB), shape: BoxShape.circle),
-                child: Center(child: Text(e, style: const TextStyle(fontSize: 24))),
-              ),
-            )).toList(),
+            children: emojis
+                .map((e) => GestureDetector(
+                      onTap: () {
+                        setState(() => _moodEntries[todayKey] = e);
+                        _persistMood(todayKey, e);
+                        Navigator.of(context).pop();
+                      },
+                      child: Container(
+                        width: 44,
+                        height: 44,
+                        decoration: const BoxDecoration(
+                            color: Color(0xFFF5F3FB), shape: BoxShape.circle),
+                        child: Center(
+                            child:
+                                Text(e, style: const TextStyle(fontSize: 24))),
+                      ),
+                    ))
+                .toList(),
           ),
         ),
       ),
@@ -953,8 +1209,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // ── dashboard page ────────────────────────────────────────────────────────
 
   Widget _buildDashboardPage() {
-    final hPad   = _s(16.0, 32.0);
-    final vGap   = _s(12.0, 20.0);
+    final hPad = _s(16.0, 32.0);
+    final vGap = _s(12.0, 20.0);
     final topPad = _s(24.0, 36.0);
 
     return SafeArea(
@@ -988,14 +1244,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   static const _clusterGreen = Color(0x8071B340);
 
   Widget _buildSelectedDayCluster(double vGap) {
-    final cardPad  = _s(16.0, 24.0); // matches _buildWeeklyOverviewChart's horizontal padding
+    final cardPad = _s(
+        16.0, 24.0); // matches _buildWeeklyOverviewChart's horizontal padding
     final dayIndex = _selectedDate.weekday % 7; // Sun=0 .. Sat=6
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final width    = constraints.maxWidth;
+        final width = constraints.maxWidth;
         final colWidth = (width - 2 * cardPad) / 7;
-        final centerX  = cardPad + (dayIndex + 0.5) * colWidth;
+        final centerX = cardPad + (dayIndex + 0.5) * colWidth;
         const triW = 18.0, triH = 9.0;
 
         return Column(
@@ -1022,6 +1279,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               decoration: _cardDecoration(elevation: 1.5, color: _clusterGreen),
               child: Column(
                 children: [
+                  // Only rendered while a session is actually active (see
+                  // _buildScreenTimeBarContent) — carries its own trailing
+                  // gap so hiding it doesn't leave a dead gap above the
+                  // to-do/notifications row.
+                  _buildScreenTimeBar(vGap),
                   _buildTwoColumnRow(
                     left: _buildToDoCard(),
                     right: _buildNotificationsCard(),
@@ -1037,8 +1299,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                       onViewAll: () => setState(() => _selectedTab = 1),
                     ),
                   ),
-                  SizedBox(height: vGap),
-                  _buildScreenTimeBar(),
                   SizedBox(height: vGap),
                   _buildTimeSpentChart(),
                 ],
@@ -1056,7 +1316,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     return MediaQuery(
       data: mq.copyWith(textScaler: const TextScaler.linear(1.0)),
       child: Scaffold(
-        backgroundColor: _bg,
+        backgroundColor:
+            _childThemeColor != null ? _tintBg(_childThemeColor!) : _bg,
         body: IndexedStack(
           index: _selectedTab,
           children: [
@@ -1071,12 +1332,16 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                     childName: widget.displayName,
                     familyId: widget.familyId,
                     childAccountId: widget.accountId,
+                    themeColor: _childThemeColor,
                   ),
             SessionTab(
-              familyId:         widget.familyId,
-              role:             widget.role,
-              childAccountId:   _childAccountId,
+              familyId: widget.familyId,
+              role: widget.role,
+              childAccountId: _childAccountId,
               childIosVendorId: _childIosVendorId,
+              bgColor:
+                  _childThemeColor != null ? _tintBg(_childThemeColor!) : null,
+              selectedDate: _selectedDate,
             ),
           ],
         ),
@@ -1088,29 +1353,218 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // ── header ────────────────────────────────────────────────────────────────
 
   Widget _buildHeader() {
-    return Text('${widget.displayName}, welcome to KidTechBalance',
-        textAlign: TextAlign.center,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: TextStyle(
-          fontFamily: 'InstrumentSerif',
-          fontSize: _s(18, 28),
-          fontStyle: FontStyle.italic,
-          color: _textMid,
-        ));
+    if (widget.role != 'child') {
+      return Text('${widget.displayName}, welcome to KidTechBalance',
+          textAlign: TextAlign.center,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: TextStyle(
+            fontFamily: 'InstrumentSerif',
+            fontSize: _s(18, 28),
+            fontStyle: FontStyle.italic,
+            color: _textMid,
+          ));
+    }
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _selfAccountStream,
+      builder: (ctx, snap) {
+        final data = snap.data?.data();
+        final avatar = (data?['avatarId'] as String?) ?? _kDefaultAvatar;
+        final themeHex = data?['themeColor'] as String?;
+        final themeColor = _colorFromHex(themeHex) ?? _barColor;
+        final streak = (data?['answerStreak'] as int?) ?? 0;
+        return Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            GestureDetector(
+              onTap: () => _showCustomizeSheet(avatar, themeHex),
+              child: Container(
+                width: _s(38, 50),
+                height: _s(38, 50),
+                decoration: BoxDecoration(
+                  color: themeColor.withOpacity(0.25),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: themeColor, width: 2),
+                ),
+                child: Center(
+                  child: Text(avatar, style: TextStyle(fontSize: _s(18, 24))),
+                ),
+              ),
+            ),
+            SizedBox(width: _s(8, 12)),
+            Flexible(
+              child: Text('${widget.displayName}, welcome to KidTechBalance',
+                  textAlign: TextAlign.center,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontFamily: 'InstrumentSerif',
+                    fontSize: _s(16, 26),
+                    fontStyle: FontStyle.italic,
+                    color: _textMid,
+                  )),
+            ),
+            if (streak > 0) ...[
+              SizedBox(width: _s(6, 10)),
+              Container(
+                padding: EdgeInsets.symmetric(
+                    horizontal: _s(8, 10), vertical: _s(3, 4)),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFFF3E0),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text('🔥$streak',
+                    style: TextStyle(
+                      fontSize: _s(12, 14),
+                      fontWeight: FontWeight.w600,
+                      color: const Color(0xFFCD8B2C),
+                    )),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  void _showCustomizeSheet(String currentAvatar, String? currentThemeHex) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetCtx) {
+        String selectedAvatar = currentAvatar;
+        int selectedColor =
+            _colorFromHex(currentThemeHex)?.value ?? _kThemeColorOptions.first;
+        return StatefulBuilder(
+          builder: (sheetCtx, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(sheetCtx).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Customize your profile',
+                      style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: _textDark)),
+                  const SizedBox(height: 16),
+                  const Text('Avatar',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: _textMid)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: _kAvatarOptions.map((e) {
+                      final isSel = e == selectedAvatar;
+                      return GestureDetector(
+                        onTap: () => setSheetState(() => selectedAvatar = e),
+                        child: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            color: isSel
+                                ? Color(selectedColor).withOpacity(0.25)
+                                : const Color(0xFFF5F3FB),
+                            shape: BoxShape.circle,
+                            border: isSel
+                                ? Border.all(
+                                    color: Color(selectedColor), width: 2)
+                                : null,
+                          ),
+                          child: Center(
+                              child: Text(e,
+                                  style: const TextStyle(fontSize: 24))),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 20),
+                  const Text('Theme color',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: _textMid)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 12,
+                    runSpacing: 12,
+                    children: _kThemeColorOptions.map((c) {
+                      final isSel = c == selectedColor;
+                      return GestureDetector(
+                        onTap: () => setSheetState(() => selectedColor = c),
+                        child: Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: Color(c),
+                            shape: BoxShape.circle,
+                            border: isSel
+                                ? Border.all(color: _textDark, width: 3)
+                                : null,
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                  const SizedBox(height: 24),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _textDark,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(999)),
+                      ),
+                      onPressed: () {
+                        final hex = (selectedColor & 0xFFFFFF)
+                            .toRadixString(16)
+                            .padLeft(6, '0');
+                        FirebaseFirestore.instance
+                            .collection('families')
+                            .doc(widget.familyId)
+                            .collection('accounts')
+                            .doc(widget.accountId)
+                            .set(
+                                {'avatarId': selectedAvatar, 'themeColor': hex},
+                                SetOptions(merge: true));
+                        Navigator.of(sheetCtx).pop();
+                      },
+                      child: const Text('Save'),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   // ── screen time bar ───────────────────────────────────────────────────────
 
-  Widget _buildScreenTimeBar() {
+  Widget _buildScreenTimeBar(double vGap) {
     // Also listen to the dashboard_days doc written by the KtbActivityMonitor extension
     // (via Firestore REST API). This gives live minutes even when KTB is closed.
     final todayKey = _dateKey(_todayDate());
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       key: ValueKey('dashday_$todayKey'),
-      stream: _selectedDate == _todayDate()
-          ? _getDashDayStream(todayKey)
-          : null,
+      stream:
+          _selectedDate == _todayDate() ? _getDashDayStream(todayKey) : null,
       builder: (ctx, daySnap) {
         if (daySnap.connectionState == ConnectionState.active) {
           final mins = daySnap.data?.data()?['screenTimeUsedMinutes'] as int?;
@@ -1129,17 +1583,17 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             });
           }
         }
-        return _buildSettingsStream();
+        return _buildSettingsStream(vGap);
       },
     );
   }
 
-  Widget _buildSettingsStream() {
+  Widget _buildSettingsStream(double vGap) {
     return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: _settingsStream,
       builder: (ctx, snap) {
         if (snap.connectionState == ConnectionState.active) {
-          final data  = snap.data?.data();
+          final data = snap.data?.data();
           final limit = data?['screenTimeLimitMinutes'] as int?;
           final updatedByRole = data?['updatedByRole'] as String?;
 
@@ -1163,9 +1617,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               // for the FIRST time today (null → value). When changing an existing
               // limit mid-session the used minutes stay the same; only the
               // denominator changes so the bar recalculates automatically.
-              if (Platform.isIOS && widget.role == 'child' &&
+              if (Platform.isIOS &&
+                  widget.role == 'child' &&
                   _lastKnownScreenTimeLimit == null) {
-                UsageStatsService.resetIosSessionCounter(_dateKey(_todayDate()));
+                UsageStatsService.resetIosSessionCounter(
+                    _dateKey(_todayDate()));
               }
             });
           }
@@ -1190,13 +1646,16 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 _extensionHasFired = false;
                 _sessionResetPending = true;
                 FirebaseFirestore.instance
-                    .collection('families').doc(widget.familyId)
-                    .collection('dashboard_days').doc(_dateKey(_todayDate()))
+                    .collection('families')
+                    .doc(widget.familyId)
+                    .collection('dashboard_days')
+                    .doc(_dateKey(_todayDate()))
                     .set({'screenTimeUsedMinutes': 0}, SetOptions(merge: true));
                 // Tell the native layer the session start time so it can
                 // compute lock-aware elapsed minutes without needing KTB open.
                 if (Platform.isIOS && widget.role == 'child') {
-                  UsageStatsService.startSessionTimer(newStart.millisecondsSinceEpoch);
+                  UsageStatsService.startSessionTimer(
+                      newStart.millisecondsSinceEpoch);
                 }
                 _sessionPollTimer = Timer.periodic(
                     const Duration(seconds: 30), (_) => _refreshSessionBar());
@@ -1211,7 +1670,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           }
 
           if (limit != null) {
-            final hadLimit = _lastKnownScreenTimeLimit != null && _lastKnownScreenTimeLimit! > 0;
+            final hadLimit = _lastKnownScreenTimeLimit != null &&
+                _lastKnownScreenTimeLimit! > 0;
             _lastKnownScreenTimeLimit = limit;
             if (widget.role == 'child') _checkLimitReached();
             if (Platform.isIOS && widget.role == 'child' && limit > 0) {
@@ -1223,7 +1683,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               // key so two same-duration sessions on the same day are still
               // recognized as distinct and each start their counter at 0 —
               // limit alone can't tell them apart.
-              final monKey = '${_dateKey(_todayDate())}_${limit}_${sessionStartMillis ?? 0}';
+              final monKey =
+                  '${_dateKey(_todayDate())}_${limit}_${sessionStartMillis ?? 0}';
               if (_monitoringKey != monKey) {
                 _monitoringKey = monKey;
                 UsageStatsService.startScreenTimeMonitoring(
@@ -1234,7 +1695,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 ).then((ok) {
                   if (!ok && mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('Screen time monitoring failed to start — bar may be inaccurate'),
+                      content: Text(
+                          'Screen time monitoring failed to start — bar may be inaccurate'),
                       duration: Duration(seconds: 5),
                       behavior: SnackBarBehavior.floating,
                     ));
@@ -1265,17 +1727,22 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           }
 
           _settingsStreamInitialized = true;
-          return _buildScreenTimeBarContent(limit);
+          return _buildScreenTimeBarContent(limit, vGap);
         }
         final limit = snap.data?.data()?['screenTimeLimitMinutes'] as int?;
-        return _buildScreenTimeBarContent(limit);
+        return _buildScreenTimeBarContent(limit, vGap);
       },
     );
   }
 
-  Widget _buildScreenTimeBarContent(int? limit) {
+  Widget _buildScreenTimeBarContent(int? limit, double vGap) {
+    // Hidden by default — only shows up while a session is actually active.
+    // _activeSessionStartTime is set/cleared in the settings-stream builder
+    // above from activeSessionStartMillis, which is null except during an
+    // active session (see session_tab.dart's _startSession/_endSession).
+    if (_activeSessionStartTime == null) return const SizedBox.shrink();
     final hasLimit = limit != null;
-    final ratio    = hasLimit ? (_usedMinutes / limit).clamp(0.0, 1.0) : 0.0;
+    final ratio = hasLimit ? (_usedMinutes / limit).clamp(0.0, 1.0) : 0.0;
 
     final Color progressColor;
     if (ratio < 0.6) {
@@ -1296,68 +1763,79 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     // Pure progress display — setting the limit and reminders now lives in
     // the Session tab (alongside the active session and its app list), so
     // tapping the bar just navigates there instead of opening a dialog here.
-    return GestureDetector(
-      onTap: () => setState(() => _selectedTab = 2),
-      child: Container(
-        width: double.infinity,
-        padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 20), _s(16, 24), _s(16, 22)),
-        decoration: _cardDecoration(elevation: 1.5),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text("Today's screen time",
+    // Carries its own trailing gap (rather than the parent Column adding a
+    // fixed one) so hiding the bar above doesn't leave a dead gap behind.
+    return Padding(
+      padding: EdgeInsets.only(bottom: vGap),
+      child: GestureDetector(
+        onTap: () => setState(() => _selectedTab = 2),
+        child: Container(
+          width: double.infinity,
+          padding: EdgeInsets.fromLTRB(
+              _s(16, 24), _s(14, 20), _s(16, 24), _s(16, 22)),
+          decoration: _cardDecoration(elevation: 1.5),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text("Today's screen time",
+                      style: TextStyle(
+                        fontFamily: 'PlusJakartaSans',
+                        fontStyle: FontStyle.italic,
+                        fontSize: _s(14, 20),
+                        color: _textLight,
+                      )),
+                  Text(
+                    rightLabel,
                     style: TextStyle(
                       fontFamily: 'PlusJakartaSans',
                       fontStyle: FontStyle.italic,
-                      fontSize: _s(14, 20),
+                      fontSize: _s(12, 18),
                       color: _textLight,
-                    )),
-                Text(rightLabel,
-                  style: TextStyle(
-                    fontFamily: 'PlusJakartaSans',
-                    fontStyle: FontStyle.italic,
-                    fontSize: _s(12, 18),
-                    color: _textLight,
+                    ),
                   ),
-                ),
-              ],
-            ),
-            SizedBox(height: _s(10, 16)),
-            if (hasLimit)
-              Stack(children: [
-                Container(
-                  height: _s(16, 24),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFE8E4F3),
-                    borderRadius: BorderRadius.circular(_s(8, 12)),
-                  ),
-                ),
-                FractionallySizedBox(
-                  widthFactor: ratio,
-                  child: Container(
+                ],
+              ),
+              SizedBox(height: _s(10, 16)),
+              if (hasLimit)
+                Stack(children: [
+                  Container(
                     height: _s(16, 24),
                     decoration: BoxDecoration(
-                      color: progressColor,
+                      color: const Color(0xFFE8E4F3),
                       borderRadius: BorderRadius.circular(_s(8, 12)),
                     ),
                   ),
-                ),
-              ])
-            else
-              Container(
-                height: _s(16, 24),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(_s(8, 12)),
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF4CAF50), Color(0xFFCD8B2C), Color(0xFFC0392B)],
-                    stops: [0.0, 0.55, 1.0],
+                  FractionallySizedBox(
+                    widthFactor: ratio,
+                    child: Container(
+                      height: _s(16, 24),
+                      decoration: BoxDecoration(
+                        color: progressColor,
+                        borderRadius: BorderRadius.circular(_s(8, 12)),
+                      ),
+                    ),
+                  ),
+                ])
+              else
+                Container(
+                  height: _s(16, 24),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(_s(8, 12)),
+                    gradient: const LinearGradient(
+                      colors: [
+                        Color(0xFF4CAF50),
+                        Color(0xFFCD8B2C),
+                        Color(0xFFC0392B)
+                      ],
+                      stops: [0.0, 0.55, 1.0],
+                    ),
                   ),
                 ),
-              ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -1366,8 +1844,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   // ── weekly overview chart ─────────────────────────────────────────────────
 
   void _onDayBarTapped(DateTime day) async {
-    final prevSunday = _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
-    final newSunday  = day.subtract(Duration(days: day.weekday % 7));
+    final prevSunday =
+        _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
+    final newSunday = day.subtract(Duration(days: day.weekday % 7));
     final weekChanged = prevSunday != newSunday;
     setState(() => _selectedDate = day);
     if (weekChanged) {
@@ -1379,11 +1858,25 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   Widget _buildWeeklyOverviewChart() {
-    final sunday = _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
-    final today  = _todayDate();
+    final sunday =
+        _selectedDate.subtract(Duration(days: _selectedDate.weekday % 7));
+    final today = _todayDate();
     final endDay = sunday.add(const Duration(days: 6));
     const dayLetters = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
 
     final weekLabel = sunday.month == endDay.month
         ? '${months[sunday.month - 1]} ${sunday.day}–${endDay.day}'
@@ -1394,18 +1887,19 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       return _weekScreenTimeMinutes[key] ?? 0;
     });
     final maxVal = values.reduce((a, b) => a > b ? a : b);
-    final moods  = widget.role == 'child' ? _moodEntries : _parentChartMoods;
+    final moods = widget.role == 'child' ? _moodEntries : _parentChartMoods;
 
-    final chartH  = _s(72.0, 112.0);
-    final labelH  = _s(16.0, 22.0);
+    final chartH = _s(72.0, 112.0);
+    final labelH = _s(16.0, 22.0);
     final letterH = _s(18.0, 26.0);
-    final moodH   = _s(20.0, 28.0);
+    final moodH = _s(20.0, 28.0);
 
     final nextSunday = sunday.add(const Duration(days: 7));
-    final canGoNext  = nextSunday.isBefore(today) || nextSunday == today;
+    final canGoNext = nextSunday.isBefore(today) || nextSunday == today;
 
     return Container(
-      padding: EdgeInsets.fromLTRB(_s(16, 24), _s(12, 18), _s(16, 24), _s(12, 18)),
+      padding:
+          EdgeInsets.fromLTRB(_s(16, 24), _s(12, 18), _s(16, 24), _s(12, 18)),
       decoration: _cardDecoration(elevation: 1.5),
       child: Column(
         children: [
@@ -1416,22 +1910,25 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               GestureDetector(
                 onTap: () => _onDayBarTapped(
                     _selectedDate.subtract(const Duration(days: 7))),
-                child: Icon(Icons.chevron_left, color: _textMid, size: _s(22, 32)),
+                child:
+                    Icon(Icons.chevron_left, color: _textMid, size: _s(22, 32)),
               ),
               GestureDetector(
                 onTap: _showCalendarDialog,
                 child: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(weekLabel, style: TextStyle(
-                      fontFamily: 'PlusJakartaSans',
-                      fontStyle: FontStyle.italic,
-                      fontSize: _s(13, 20),
-                      fontWeight: FontWeight.w600,
-                      color: _textDark,
-                    )),
+                    Text(weekLabel,
+                        style: TextStyle(
+                          fontFamily: 'PlusJakartaSans',
+                          fontStyle: FontStyle.italic,
+                          fontSize: _s(13, 20),
+                          fontWeight: FontWeight.w600,
+                          color: _textDark,
+                        )),
                     SizedBox(width: _s(2, 4)),
-                    Icon(Icons.keyboard_arrow_down_rounded, color: _textMid, size: _s(16, 22)),
+                    Icon(Icons.keyboard_arrow_down_rounded,
+                        color: _textMid, size: _s(16, 22)),
                   ],
                 ),
               ),
@@ -1457,16 +1954,16 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: List.generate(7, (i) {
-                final day      = sunday.add(Duration(days: i));
-                final key      = _dateKey(day);
-                final mins     = values[i];
+                final day = sunday.add(Duration(days: i));
+                final key = _dateKey(day);
+                final mins = values[i];
                 final isSelDay = day == _selectedDate;
-                final isToday  = day == today;
+                final isToday = day == today;
                 final isFuture = day.isAfter(today);
-                final ratio    = (!isFuture && maxVal > 0)
+                final ratio = (!isFuture && maxVal > 0)
                     ? (mins / maxVal).clamp(0.04, 1.0)
                     : 0.04;
-                final barH     = isFuture ? 2.0 : chartH * ratio;
+                final barH = isFuture ? 2.0 : chartH * ratio;
                 final moodEmoji = moods[key];
 
                 final barColor = isFuture
@@ -1487,14 +1984,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                         SizedBox(
                           height: labelH,
                           child: mins > 0 && isSelDay
-                              ? Center(child: Text(
-                                  UsageStatsService.formatMinutes(mins),
-                                  style: TextStyle(
-                                    fontFamily: 'PlusJakartaSans',
-                                    fontStyle: FontStyle.italic,
-                                    fontSize: _s(8, 12),
-                                    color: _textMid,
-                                  )))
+                              ? Center(
+                                  child: Text(
+                                      UsageStatsService.formatMinutes(mins),
+                                      style: TextStyle(
+                                        fontFamily: 'PlusJakartaSans',
+                                        fontStyle: FontStyle.italic,
+                                        fontSize: _s(8, 12),
+                                        color: _textMid,
+                                      )))
                               : null,
                         ),
                         // Bar grows from bottom
@@ -1503,7 +2001,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                             alignment: Alignment.bottomCenter,
                             child: Container(
                               height: barH,
-                              margin: EdgeInsets.symmetric(horizontal: _s(3, 5)),
+                              margin:
+                                  EdgeInsets.symmetric(horizontal: _s(3, 5)),
                               decoration: BoxDecoration(
                                 color: barColor,
                                 borderRadius: BorderRadius.vertical(
@@ -1515,16 +2014,20 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                         // Day letter
                         SizedBox(
                           height: letterH,
-                          child: Center(child: Text(dayLetters[i], style: TextStyle(
-                            fontFamily: 'PlusJakartaSans',
-                            fontSize: _s(11, 16),
-                            fontWeight: isToday ? FontWeight.w700 : FontWeight.w500,
-                            color: isToday
-                                ? _textDark
-                                : isFuture
-                                    ? _textLight.withValues(alpha: 0.3)
-                                    : _textMid,
-                          ))),
+                          child: Center(
+                              child: Text(dayLetters[i],
+                                  style: TextStyle(
+                                    fontFamily: 'PlusJakartaSans',
+                                    fontSize: _s(11, 16),
+                                    fontWeight: isToday
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                    color: isToday
+                                        ? _textDark
+                                        : isFuture
+                                            ? _textLight.withValues(alpha: 0.3)
+                                            : _textMid,
+                                  ))),
                         ),
                         // Mood emoji — every day gets a circle indicator: green
                         // when that day is selected, empty/outlined otherwise.
@@ -1535,7 +2038,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                           height: moodH,
                           child: Center(
                             child: GestureDetector(
-                              onTap: (isToday && widget.role == 'child') ? _showMoodPicker : null,
+                              onTap: (isToday && widget.role == 'child')
+                                  ? _showMoodPicker
+                                  : null,
                               behavior: HitTestBehavior.opaque,
                               child: Container(
                                 width: moodH,
@@ -1543,15 +2048,21 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
                                   border: Border.all(
-                                    color: isSelDay ? _green : _textLight.withValues(alpha: 0.3),
+                                    color: isSelDay
+                                        ? _green
+                                        : _textLight.withValues(alpha: 0.3),
                                     width: 1.5,
                                   ),
                                 ),
                                 child: Center(
                                   child: moodEmoji != null
-                                      ? Text(moodEmoji, style: TextStyle(fontSize: _s(11, 17)))
+                                      ? Text(moodEmoji,
+                                          style:
+                                              TextStyle(fontSize: _s(11, 17)))
                                       : (isToday && widget.role == 'child')
-                                          ? Icon(Icons.add, size: _s(12, 18), color: _textLight)
+                                          ? Icon(Icons.add,
+                                              size: _s(12, 18),
+                                              color: _textLight)
                                           : null,
                                 ),
                               ),
@@ -1601,7 +2112,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           if (_todoStreamInitialized &&
               updatedAt != null &&
               _lastKnownTodosUpdatedAt != null &&
-              updatedAt.millisecondsSinceEpoch > _lastKnownTodosUpdatedAt!.millisecondsSinceEpoch &&
+              updatedAt.millisecondsSinceEpoch >
+                  _lastKnownTodosUpdatedAt!.millisecondsSinceEpoch &&
               updatedByRole != null &&
               updatedByRole != widget.role) {
             WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -1616,7 +2128,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           }
           if (updatedAt != null) _lastKnownTodosUpdatedAt = updatedAt;
         }
-        if (!_todoStreamInitialized && snap.connectionState == ConnectionState.active) {
+        if (!_todoStreamInitialized &&
+            snap.connectionState == ConnectionState.active) {
           _todoStreamInitialized = true;
         }
 
@@ -1624,15 +2137,16 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         if (snap.hasData && snap.data!.exists) {
           final raw = snap.data!.data()?['todos'] as List<dynamic>?;
           tasks = raw?.map((t) {
-            final m = t as Map<String, dynamic>;
-            return _Task(
-              text: m['text'] as String? ?? '',
-              done: m['done'] as bool? ?? false,
-              addedBy: m['addedBy'] as String? ?? '',
-              sessionId: m['sessionId'] as String?,
-              taskIndex: m['taskIndex'] as int?,
-            );
-          }).toList() ?? [];
+                final m = t as Map<String, dynamic>;
+                return _Task(
+                  text: m['text'] as String? ?? '',
+                  done: m['done'] as bool? ?? false,
+                  addedBy: m['addedBy'] as String? ?? '',
+                  sessionId: m['sessionId'] as String?,
+                  taskIndex: m['taskIndex'] as int?,
+                );
+              }).toList() ??
+              [];
         }
         return _buildToDoCardContent(tasks);
       },
@@ -1640,7 +2154,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 
   Widget _buildToDoCardContent(List<_Task> todos) {
-    final sorted = [...todos.where((t) => !t.done), ...todos.where((t) => t.done)];
+    final sorted = [
+      ...todos.where((t) => !t.done),
+      ...todos.where((t) => t.done)
+    ];
 
     return GestureDetector(
       onTap: _showTodoDialog,
@@ -1650,19 +2167,24 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('To-do', style: TextStyle(
-              fontFamily: 'PlusJakartaSans',
-              fontStyle: FontStyle.italic,
-              fontSize: _s(18, 28),
-              fontWeight: FontWeight.w700,
-              color: _textDark,
-            )),
+            Text('To-do',
+                style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontStyle: FontStyle.italic,
+                  fontSize: _s(18, 28),
+                  fontWeight: FontWeight.w700,
+                  color: _textDark,
+                )),
             SizedBox(height: _s(12, 20)),
             SizedBox(
               height: _s(110.0, 180.0),
               child: sorted.isEmpty
-                  ? Center(child: Text('No tasks yet', style: TextStyle(
-                      fontFamily: 'PlusJakartaSans', fontSize: _s(12, 18), color: _textLight)))
+                  ? Center(
+                      child: Text('No tasks yet',
+                          style: TextStyle(
+                              fontFamily: 'PlusJakartaSans',
+                              fontSize: _s(12, 18),
+                              color: _textLight)))
                   : ListView.separated(
                       padding: EdgeInsets.zero,
                       itemCount: sorted.length,
@@ -1692,14 +2214,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               ),
         SizedBox(width: _s(8, 14)),
         Expanded(
-          child: Text(task.text, style: TextStyle(
-            fontFamily: 'PlusJakartaSans',
-            fontStyle: FontStyle.italic,
-            fontSize: _s(14, 22),
-            color: task.done ? _textLight : _textDark,
-            decoration: task.done ? TextDecoration.lineThrough : null,
-            decorationColor: _textLight,
-          )),
+          child: Text(task.text,
+              style: TextStyle(
+                fontFamily: 'PlusJakartaSans',
+                fontStyle: FontStyle.italic,
+                fontSize: _s(14, 22),
+                color: task.done ? _textLight : _textDark,
+                decoration: task.done ? TextDecoration.lineThrough : null,
+                decorationColor: _textLight,
+              )),
         ),
       ],
     );
@@ -1714,55 +2237,59 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Notifications', style: TextStyle(
-            fontFamily: 'PlusJakartaSans',
-            fontStyle: FontStyle.italic,
-            fontSize: _s(15, 26),
-            fontWeight: FontWeight.w700,
-            color: _textDark,
-          )),
+          Text('Notifications',
+              style: TextStyle(
+                fontFamily: 'PlusJakartaSans',
+                fontStyle: FontStyle.italic,
+                fontSize: _s(15, 26),
+                fontWeight: FontWeight.w700,
+                color: _textDark,
+              )),
           SizedBox(height: _s(10, 18)),
           SizedBox(
             height: _s(110.0, 180.0),
             child: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
               key: ValueKey('notifs_${_dateKey(_selectedDate)}'),
               stream: FirebaseFirestore.instance
-                  .collection('families').doc(widget.familyId)
+                  .collection('families')
+                  .doc(widget.familyId)
                   .collection('notifications')
                   .where('targetRole', isEqualTo: widget.role)
                   .limit(50)
                   .snapshots(),
               builder: (context, snap) {
                 if (snap.hasError) {
-                  return Text('Unable to load', style: TextStyle(
-                    fontSize: _s(12, 18), color: _textLight,
-                    fontFamily: 'PlusJakartaSans',
-                  ));
+                  return Text('Unable to load',
+                      style: TextStyle(
+                        fontSize: _s(12, 18),
+                        color: _textLight,
+                        fontFamily: 'PlusJakartaSans',
+                      ));
                 }
                 // Filter by sentAt date in Dart so older docs without a dateKey
                 // field are still shown when the user browses past days.
                 final sel = _selectedDate;
-                final docs = (snap.data?.docs ?? [])
-                    .where((doc) {
-                      final ts = doc.data()['sentAt'] as Timestamp?;
-                      if (ts == null) return false;
-                      final dt = ts.toDate();
-                      return dt.year == sel.year &&
-                             dt.month == sel.month &&
-                             dt.day == sel.day;
-                    })
-                    .toList()
+                final docs = (snap.data?.docs ?? []).where((doc) {
+                  final ts = doc.data()['sentAt'] as Timestamp?;
+                  if (ts == null) return false;
+                  final dt = ts.toDate();
+                  return dt.year == sel.year &&
+                      dt.month == sel.month &&
+                      dt.day == sel.day;
+                }).toList()
                   ..sort((a, b) {
                     final ta = (a.data()['sentAt'] as Timestamp?)?.seconds ?? 0;
                     final tb = (b.data()['sentAt'] as Timestamp?)?.seconds ?? 0;
                     return tb.compareTo(ta);
                   });
                 if (docs.isEmpty) {
-                  return Center(child: Text('No notifications yet', style: TextStyle(
-                    fontFamily: 'PlusJakartaSans',
-                    fontSize: _s(12, 18),
-                    color: _textLight,
-                  )));
+                  return Center(
+                      child: Text('No notifications yet',
+                          style: TextStyle(
+                            fontFamily: 'PlusJakartaSans',
+                            fontSize: _s(12, 18),
+                            color: _textLight,
+                          )));
                 }
                 return ListView.separated(
                   padding: EdgeInsets.zero,
@@ -1771,9 +2298,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                   itemBuilder: (_, i) {
                     final d = docs[i].data();
                     final title = d['title'] as String? ?? '';
-                    final body  = d['body']  as String? ?? '';
-                    final ts    = d['sentAt'] as Timestamp?;
-                    final time  = ts != null ? _fmtNotifTime(ts.toDate()) : '';
+                    final body = d['body'] as String? ?? '';
+                    final ts = d['sentAt'] as Timestamp?;
+                    final time = ts != null ? _fmtNotifTime(ts.toDate()) : '';
                     return _notifItem(title, body, time);
                   },
                 );
@@ -1787,7 +2314,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   String _fmtNotifTime(DateTime dt) {
     final now = DateTime.now();
-    final isToday = dt.year == now.year && dt.month == now.month && dt.day == now.day;
+    final isToday =
+        dt.year == now.year && dt.month == now.month && dt.day == now.day;
     if (isToday) {
       final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
       final m = dt.minute.toString().padLeft(2, '0');
@@ -1803,7 +2331,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       children: [
         Padding(
           padding: const EdgeInsets.only(top: 2),
-          child: Icon(Icons.notifications_outlined, size: _s(13, 20), color: _textLight),
+          child: Icon(Icons.notifications_outlined,
+              size: _s(13, 20), color: _textLight),
         ),
         SizedBox(width: _s(6, 10)),
         Expanded(
@@ -1812,30 +2341,35 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             children: [
               Row(
                 children: [
-                  Expanded(child: Text(title, style: TextStyle(
-                    fontFamily: 'PlusJakartaSans',
-                    fontSize: _s(12, 19),
-                    fontWeight: FontWeight.w600,
-                    color: _textDark,
-                    height: 1.3,
-                  ))),
+                  Expanded(
+                      child: Text(title,
+                          style: TextStyle(
+                            fontFamily: 'PlusJakartaSans',
+                            fontSize: _s(12, 19),
+                            fontWeight: FontWeight.w600,
+                            color: _textDark,
+                            height: 1.3,
+                          ))),
                   if (time.isNotEmpty) ...[
                     const SizedBox(width: 4),
-                    Text(time, style: TextStyle(
-                      fontFamily: 'PlusJakartaSans',
-                      fontSize: _s(10, 15),
-                      color: _textLight,
-                    )),
+                    Text(time,
+                        style: TextStyle(
+                          fontFamily: 'PlusJakartaSans',
+                          fontSize: _s(10, 15),
+                          color: _textLight,
+                        )),
                   ],
                 ],
               ),
-              if (body.isNotEmpty) Text(body, style: TextStyle(
-                fontFamily: 'PlusJakartaSans',
-                fontStyle: FontStyle.italic,
-                fontSize: _s(11, 17),
-                color: _textMid,
-                height: 1.3,
-              )),
+              if (body.isNotEmpty)
+                Text(body,
+                    style: TextStyle(
+                      fontFamily: 'PlusJakartaSans',
+                      fontStyle: FontStyle.italic,
+                      fontSize: _s(11, 17),
+                      color: _textMid,
+                      height: 1.3,
+                    )),
             ],
           ),
         ),
@@ -1862,37 +2396,40 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: EdgeInsets.symmetric(horizontal: _s(10, 16), vertical: _s(4, 6)),
+        padding:
+            EdgeInsets.symmetric(horizontal: _s(10, 16), vertical: _s(4, 6)),
         decoration: BoxDecoration(
           color: active ? _barColor : const Color(0xFFE8E4F3),
           borderRadius: BorderRadius.circular(_s(20, 30)),
         ),
-        child: Text(label, style: TextStyle(
-          fontFamily: 'PlusJakartaSans',
-          fontStyle: FontStyle.italic,
-          fontSize: _s(11, 17),
-          fontWeight: FontWeight.w700,
-          color: active ? Colors.white : _textMid,
-        )),
+        child: Text(label,
+            style: TextStyle(
+              fontFamily: 'PlusJakartaSans',
+              fontStyle: FontStyle.italic,
+              fontSize: _s(11, 17),
+              fontWeight: FontWeight.w700,
+              color: active ? Colors.white : _textMid,
+            )),
       ),
     );
   }
 
   Widget _buildTimeSpentChart() {
-    final chartH   = _s(90.0, 150.0);
-    final barW     = _s(36.0, 58.0);
+    final chartH = _s(90.0, 150.0);
+    final barW = _s(36.0, 58.0);
     final isParent = widget.role == 'parent';
 
     Widget titleRow = Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text('Time spent today', style: TextStyle(
-          fontFamily: 'PlusJakartaSans',
-          fontStyle: FontStyle.italic,
-          fontSize: _s(17, 28),
-          fontWeight: FontWeight.w700,
-          color: _textDark,
-        )),
+        Text('Time spent today',
+            style: TextStyle(
+              fontFamily: 'PlusJakartaSans',
+              fontStyle: FontStyle.italic,
+              fontSize: _s(17, 28),
+              fontWeight: FontWeight.w700,
+              color: _textDark,
+            )),
         if (isParent) _buildUsageToggle(),
       ],
     );
@@ -1901,45 +2438,59 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     final showingFirestoreData = isParent && _showChildUsage;
     final nativeSupported = Platform.isAndroid || Platform.isIOS;
     final needsUnsupportedMsg = !showingFirestoreData && !nativeSupported;
-    final needsPermission = !showingFirestoreData && nativeSupported && !_usagePermissionGranted;
+    final needsPermission =
+        !showingFirestoreData && nativeSupported && !_usagePermissionGranted;
 
     if (needsUnsupportedMsg) {
       return Container(
-        padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
+        padding:
+            EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
         decoration: _cardDecoration(),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           titleRow,
           SizedBox(height: _s(14, 22)),
           Text('Screen time data is not available on this device.',
-            style: TextStyle(fontFamily: 'PlusJakartaSans', fontStyle: FontStyle.italic,
-              fontSize: _s(13, 20), color: _textLight)),
+              style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontStyle: FontStyle.italic,
+                  fontSize: _s(13, 20),
+                  color: _textLight)),
         ]),
       );
     }
 
     if (_activeLoading) {
       return Container(
-        padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
+        padding:
+            EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
         decoration: _cardDecoration(),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           titleRow,
           SizedBox(height: _s(20, 30)),
-          Center(child: SizedBox(width: _s(20, 32), height: _s(20, 32),
-            child: CircularProgressIndicator(strokeWidth: 2, color: _barColor))),
+          Center(
+              child: SizedBox(
+                  width: _s(20, 32),
+                  height: _s(20, 32),
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: _barColor))),
         ]),
       );
     }
 
     if (needsPermission) {
       return Container(
-        padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
+        padding:
+            EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
         decoration: _cardDecoration(),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           titleRow,
           SizedBox(height: _s(12, 20)),
           Text('Usage access permission is required to show app usage.',
-            style: TextStyle(fontFamily: 'PlusJakartaSans', fontStyle: FontStyle.italic,
-              fontSize: _s(12, 19), color: _textLight)),
+              style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontStyle: FontStyle.italic,
+                  fontSize: _s(12, 19),
+                  color: _textLight)),
           SizedBox(height: _s(10, 16)),
           GestureDetector(
             onTap: () async {
@@ -1947,14 +2498,19 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               await _loadUsageStats(_selectedDate);
             },
             child: Container(
-              padding: EdgeInsets.symmetric(horizontal: _s(14, 22), vertical: _s(7, 11)),
+              padding: EdgeInsets.symmetric(
+                  horizontal: _s(14, 22), vertical: _s(7, 11)),
               decoration: BoxDecoration(
                 color: _barColor,
                 borderRadius: BorderRadius.circular(_s(8, 12)),
               ),
-              child: Text('Grant Access', style: TextStyle(
-                fontFamily: 'PlusJakartaSans', fontStyle: FontStyle.italic,
-                fontSize: _s(12, 19), fontWeight: FontWeight.w700, color: Colors.white)),
+              child: Text('Grant Access',
+                  style: TextStyle(
+                      fontFamily: 'PlusJakartaSans',
+                      fontStyle: FontStyle.italic,
+                      fontSize: _s(12, 19),
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white)),
             ),
           ),
         ]),
@@ -1964,7 +2520,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     // ── iOS: embed the DeviceActivityReport extension as a platform view ─────
     if (Platform.isIOS) {
       return Container(
-        padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
+        padding:
+            EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
         decoration: _cardDecoration(),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1993,7 +2550,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     final Map<String, int> _pkgTotals = {};
     final Map<String, String> _pkgNames = {};
     for (final e in _activeEntries) {
-      _pkgTotals[e.packageName] = (_pkgTotals[e.packageName] ?? 0) + e.timeMinutes;
+      _pkgTotals[e.packageName] =
+          (_pkgTotals[e.packageName] ?? 0) + e.timeMinutes;
       _pkgNames[e.packageName] = e.appName;
     }
     final entries = (_pkgTotals.entries
@@ -2007,26 +2565,32 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       ..sort((a, b) => b.timeMinutes.compareTo(a.timeMinutes)));
     if (entries.isEmpty) {
       return Container(
-        padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
+        padding:
+            EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
         decoration: _cardDecoration(),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           titleRow,
           SizedBox(height: _s(14, 22)),
           Text(
-            showingFirestoreData
-                ? "Child hasn't opened the app yet today, or their data hasn't synced."
-                : 'No app usage recorded yet for this day.',
-            style: TextStyle(fontFamily: 'PlusJakartaSans', fontStyle: FontStyle.italic,
-              fontSize: _s(13, 20), color: _textLight)),
+              showingFirestoreData
+                  ? "Child hasn't opened the app yet today, or their data hasn't synced."
+                  : 'No app usage recorded yet for this day.',
+              style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontStyle: FontStyle.italic,
+                  fontSize: _s(13, 20),
+                  color: _textLight)),
         ]),
       );
     }
 
-    final maxTime   = entries.map((e) => e.timeMinutes).reduce((a, b) => a > b ? a : b);
+    final maxTime =
+        entries.map((e) => e.timeMinutes).reduce((a, b) => a > b ? a : b);
     final displayed = entries.take(6).toList();
 
     return Container(
-      padding: EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
+      padding:
+          EdgeInsets.fromLTRB(_s(16, 24), _s(14, 22), _s(16, 24), _s(16, 24)),
       decoration: _cardDecoration(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -2046,7 +2610,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                     : (() {
                         final words = entry.appName.split(' ');
                         final first = words.first;
-                        return first.length <= 8 ? first : first.substring(0, 8);
+                        return first.length <= 8
+                            ? first
+                            : first.substring(0, 8);
                       })();
                 return Padding(
                   padding: EdgeInsets.only(right: _s(10, 16)),
@@ -2054,24 +2620,29 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       Text(UsageStatsService.formatMinutes(entry.timeMinutes),
-                        style: TextStyle(fontFamily: 'PlusJakartaSans', fontStyle: FontStyle.italic,
-                          fontSize: _s(9, 14), color: _textMid)),
+                          style: TextStyle(
+                              fontFamily: 'PlusJakartaSans',
+                              fontStyle: FontStyle.italic,
+                              fontSize: _s(9, 14),
+                              color: _textMid)),
                       SizedBox(height: _s(3, 5)),
                       Container(
                         width: barW,
                         height: chartH * ratio.clamp(0.04, 1.0),
                         decoration: BoxDecoration(
                           color: _barColor,
-                          borderRadius: BorderRadius.vertical(top: Radius.circular(_s(6, 10))),
+                          borderRadius: BorderRadius.vertical(
+                              top: Radius.circular(_s(6, 10))),
                         ),
                       ),
                       SizedBox(height: _s(8, 12)),
-                      Text(label, style: TextStyle(
-                        fontFamily: 'PlusJakartaSans',
-                        fontStyle: FontStyle.italic,
-                        fontSize: _s(10, 16),
-                        color: _textLight,
-                      )),
+                      Text(label,
+                          style: TextStyle(
+                            fontFamily: 'PlusJakartaSans',
+                            fontStyle: FontStyle.italic,
+                            fontSize: _s(10, 16),
+                            color: _textLight,
+                          )),
                     ],
                   ),
                 );
@@ -2089,7 +2660,12 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 10, offset: const Offset(0, -2))],
+        boxShadow: [
+          BoxShadow(
+              color: Colors.black.withValues(alpha: 0.06),
+              blurRadius: 10,
+              offset: const Offset(0, -2))
+        ],
       ),
       child: SafeArea(
         top: false,
@@ -2098,9 +2674,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _navItem(icon: Icons.dashboard_outlined, label: 'Dashboard', index: 0),
-              _navItem(icon: Icons.send_outlined,      label: 'Nudges',    index: 1),
-              _navItem(icon: Icons.lock_outline_rounded, label: 'Session', index: 2),
+              _navItem(
+                  icon: Icons.dashboard_outlined, label: 'Dashboard', index: 0),
+              _navItem(icon: Icons.send_outlined, label: 'Nudges', index: 1),
+              _navItem(
+                  icon: Icons.lock_outline_rounded, label: 'Session', index: 2),
             ],
           ),
         ),
@@ -2108,9 +2686,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   }
 
-  Widget _navItem({required IconData icon, required String label, required int index}) {
+  Widget _navItem(
+      {required IconData icon, required String label, required int index}) {
     final selected = _selectedTab == index;
-    final color    = selected ? _textDark : _textLight;
+    final color = selected ? _textDark : _textLight;
     return GestureDetector(
       onTap: () => _onTabTapped(index),
       behavior: HitTestBehavior.opaque,
@@ -2121,12 +2700,13 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           children: [
             Icon(icon, color: color, size: _s(24, 34)),
             SizedBox(height: _s(4, 6)),
-            Text(label, style: TextStyle(
-              fontFamily: 'PlusJakartaSans',
-              fontSize: _s(11, 16),
-              fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-              color: color,
-            )),
+            Text(label,
+                style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontSize: _s(11, 16),
+                  fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
+                  color: color,
+                )),
           ],
         ),
       ),
@@ -2142,7 +2722,8 @@ class _CalendarDialog extends StatefulWidget {
   final DateTime selectedDate;
   final ValueChanged<DateTime> onDateSelected;
 
-  const _CalendarDialog({required this.selectedDate, required this.onDateSelected});
+  const _CalendarDialog(
+      {required this.selectedDate, required this.onDateSelected});
 
   @override
   State<_CalendarDialog> createState() => _CalendarDialogState();
@@ -2157,25 +2738,35 @@ class _CalendarDialogState extends State<_CalendarDialog> {
   late FixedExtentScrollController _yearCtrl;
 
   static const _minYear = 2020;
-  static const _textDark  = Color(0xFF1A1A2E);
-  static const _textMid   = Color(0xFF4A4A6A);
+  static const _textDark = Color(0xFF1A1A2E);
+  static const _textMid = Color(0xFF4A4A6A);
   static const _textLight = Color(0xFF8A8AAA);
-  static const _green     = Color(0xFF4A7C59);
+  static const _green = Color(0xFF4A7C59);
 
   static const _monthNames = [
-    'January','February','March','April','May','June',
-    'July','August','September','October','November','December',
+    'January',
+    'February',
+    'March',
+    'April',
+    'May',
+    'June',
+    'July',
+    'August',
+    'September',
+    'October',
+    'November',
+    'December',
   ];
 
   @override
   void initState() {
     super.initState();
-    _selected  = widget.selectedDate;
+    _selected = widget.selectedDate;
     _viewMonth = DateTime(_selected.year, _selected.month, 1);
-    final today    = _todayDate();
+    final today = _todayDate();
     final yearList = today.year - _minYear + 1;
     _monthCtrl = FixedExtentScrollController(initialItem: _viewMonth.month - 1);
-    _yearCtrl  = FixedExtentScrollController(
+    _yearCtrl = FixedExtentScrollController(
         initialItem: (_viewMonth.year - _minYear).clamp(0, yearList - 1));
   }
 
@@ -2186,25 +2777,35 @@ class _CalendarDialogState extends State<_CalendarDialog> {
     super.dispose();
   }
 
-  String _monthLabel() => '${_monthNames[_viewMonth.month - 1]} ${_viewMonth.year}';
+  String _monthLabel() =>
+      '${_monthNames[_viewMonth.month - 1]} ${_viewMonth.year}';
 
   bool get _canGoNext {
     final today = _todayDate();
-    final next  = DateTime(_viewMonth.year, _viewMonth.month + 1, 1);
-    return next.year < today.year || (next.year == today.year && next.month <= today.month);
+    final next = DateTime(_viewMonth.year, _viewMonth.month + 1, 1);
+    return next.year < today.year ||
+        (next.year == today.year && next.month <= today.month);
   }
 
   String _formatFull(DateTime d) {
-    const wdays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
+    const wdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday'
+    ];
     return '${wdays[d.weekday - 1]}, ${d.day}${_ordinalSuffix(d.day)} ${_monthNames[d.month - 1]}';
   }
 
   // ── month/year picker ─────────────────────────────────────────────────────
 
   Widget _buildMonthYearPicker() {
-    final today    = _todayDate();
-    final maxYear  = today.year;
-    final years    = List.generate(maxYear - _minYear + 1, (i) => _minYear + i);
+    final today = _todayDate();
+    final maxYear = today.year;
+    final years = List.generate(maxYear - _minYear + 1, (i) => _minYear + i);
 
     return Column(
       children: [
@@ -2223,13 +2824,16 @@ class _CalendarDialogState extends State<_CalendarDialog> {
                     // Preview but don't apply until Done
                   },
                   childDelegate: ListWheelChildLoopingListDelegate(
-                    children: List.generate(12, (i) => Center(
-                      child: Text(_monthNames[i], style: const TextStyle(
-                        fontFamily: 'PlusJakartaSans',
-                        fontSize: 16,
-                        color: _textDark,
-                      )),
-                    )),
+                    children: List.generate(
+                        12,
+                        (i) => Center(
+                              child: Text(_monthNames[i],
+                                  style: const TextStyle(
+                                    fontFamily: 'PlusJakartaSans',
+                                    fontSize: 16,
+                                    color: _textDark,
+                                  )),
+                            )),
                   ),
                 ),
               ),
@@ -2240,13 +2844,16 @@ class _CalendarDialogState extends State<_CalendarDialog> {
                   itemExtent: 44,
                   perspective: 0.003,
                   physics: const FixedExtentScrollPhysics(),
-                  children: years.map((y) => Center(
-                    child: Text('$y', style: const TextStyle(
-                      fontFamily: 'PlusJakartaSans',
-                      fontSize: 16,
-                      color: _textDark,
-                    )),
-                  )).toList(),
+                  children: years
+                      .map((y) => Center(
+                            child: Text('$y',
+                                style: const TextStyle(
+                                  fontFamily: 'PlusJakartaSans',
+                                  fontSize: 16,
+                                  color: _textDark,
+                                )),
+                          ))
+                      .toList(),
                 ),
               ),
             ],
@@ -2258,9 +2865,10 @@ class _CalendarDialogState extends State<_CalendarDialog> {
           child: ElevatedButton(
             onPressed: () {
               final selMonth = _monthCtrl.selectedItem % 12 + 1;
-              final selYear  = _minYear + _yearCtrl.selectedItem.clamp(0, years.length - 1);
+              final selYear =
+                  _minYear + _yearCtrl.selectedItem.clamp(0, years.length - 1);
               // Clamp to today's month if future
-              final today2   = _todayDate();
+              final today2 = _todayDate();
               DateTime target = DateTime(selYear, selMonth, 1);
               if (target.isAfter(DateTime(today2.year, today2.month, 1))) {
                 target = DateTime(today2.year, today2.month, 1);
@@ -2273,15 +2881,17 @@ class _CalendarDialogState extends State<_CalendarDialog> {
             style: ElevatedButton.styleFrom(
               backgroundColor: _green,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
               padding: const EdgeInsets.symmetric(vertical: 12),
               elevation: 0,
             ),
-            child: const Text('Done', style: TextStyle(
-              fontFamily: 'PlusJakartaSans',
-              fontWeight: FontWeight.w700,
-              fontSize: 15,
-            )),
+            child: const Text('Done',
+                style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontWeight: FontWeight.w700,
+                  fontSize: 15,
+                )),
           ),
         ),
       ],
@@ -2293,12 +2903,13 @@ class _CalendarDialogState extends State<_CalendarDialog> {
   Widget _buildCalendarGrid(DateTime today) {
     const cellSize = 44.0;
     final firstOfMonth = DateTime(_viewMonth.year, _viewMonth.month, 1);
-    final startOffset  = firstOfMonth.weekday % 7; // Sun=0 Mon=1 .. Sat=6
-    final daysInMonth  = DateUtils.getDaysInMonth(_viewMonth.year, _viewMonth.month);
+    final startOffset = firstOfMonth.weekday % 7; // Sun=0 Mon=1 .. Sat=6
+    final daysInMonth =
+        DateUtils.getDaysInMonth(_viewMonth.year, _viewMonth.month);
 
     final List<Widget> rows = [];
     int dayNum = 1;
-    int week   = 0;
+    int week = 0;
 
     while (dayNum <= daysInMonth) {
       final List<Widget> cells = [];
@@ -2307,17 +2918,17 @@ class _CalendarDialogState extends State<_CalendarDialog> {
         if (idx < startOffset || dayNum > daysInMonth) {
           cells.add(const SizedBox(width: cellSize, height: cellSize));
         } else {
-          final day      = DateTime(_viewMonth.year, _viewMonth.month, dayNum);
+          final day = DateTime(_viewMonth.year, _viewMonth.month, dayNum);
           final isFuture = day.isAfter(today);
-          final isSel    = day == _selected;
-          final isToday  = day == today;
+          final isSel = day == _selected;
+          final isToday = day == today;
 
-          Color bg        = Colors.transparent;
+          Color bg = Colors.transparent;
           Color textColor = _textDark;
-          bool  hasBorder = false;
+          bool hasBorder = false;
 
           if (isSel) {
-            bg        = _green;
+            bg = _green;
             textColor = Colors.white;
           } else if (isToday) {
             hasBorder = true;
@@ -2327,25 +2938,30 @@ class _CalendarDialogState extends State<_CalendarDialog> {
           }
 
           cells.add(GestureDetector(
-            onTap: isFuture ? null : () {
-              setState(() => _selected = day);
-              widget.onDateSelected(day);
-            },
+            onTap: isFuture
+                ? null
+                : () {
+                    setState(() => _selected = day);
+                    widget.onDateSelected(day);
+                  },
             child: Container(
               width: cellSize,
               height: cellSize,
               decoration: BoxDecoration(
                 color: bg,
                 shape: BoxShape.circle,
-                border: hasBorder ? Border.all(color: _green, width: 1.8) : null,
+                border:
+                    hasBorder ? Border.all(color: _green, width: 1.8) : null,
               ),
               alignment: Alignment.center,
-              child: Text('${day.day}', style: TextStyle(
-                fontFamily: 'PlusJakartaSans',
-                fontSize: 16,
-                fontWeight: isSel || isToday ? FontWeight.w700 : FontWeight.w400,
-                color: textColor,
-              )),
+              child: Text('${day.day}',
+                  style: TextStyle(
+                    fontFamily: 'PlusJakartaSans',
+                    fontSize: 16,
+                    fontWeight:
+                        isSel || isToday ? FontWeight.w700 : FontWeight.w400,
+                    color: textColor,
+                  )),
             ),
           ));
           dayNum++;
@@ -2359,10 +2975,12 @@ class _CalendarDialogState extends State<_CalendarDialog> {
     }
 
     return Column(
-      children: rows.map((r) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: r,
-      )).toList(),
+      children: rows
+          .map((r) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 2),
+                child: r,
+              ))
+          .toList(),
     );
   }
 
@@ -2394,26 +3012,30 @@ class _CalendarDialogState extends State<_CalendarDialog> {
                       IconButton(
                         icon: const Icon(Icons.chevron_left),
                         color: _textMid,
-                        onPressed: () => setState(() =>
-                            _viewMonth = DateTime(_viewMonth.year, _viewMonth.month - 1, 1)),
+                        onPressed: () => setState(() => _viewMonth =
+                            DateTime(_viewMonth.year, _viewMonth.month - 1, 1)),
                       )
                     else
                       const SizedBox(width: 48),
                     // Tappable month/year label
                     GestureDetector(
-                      onTap: () => setState(() => _showMonthYearPicker = !_showMonthYearPicker),
+                      onTap: () => setState(
+                          () => _showMonthYearPicker = !_showMonthYearPicker),
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
-                          Text(_monthLabel(), style: const TextStyle(
-                            fontFamily: 'PlusJakartaSans',
-                            fontSize: 18,
-                            fontWeight: FontWeight.w700,
-                            color: _textDark,
-                          )),
+                          Text(_monthLabel(),
+                              style: const TextStyle(
+                                fontFamily: 'PlusJakartaSans',
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color: _textDark,
+                              )),
                           const SizedBox(width: 4),
                           Icon(
-                            _showMonthYearPicker ? Icons.expand_less : Icons.expand_more,
+                            _showMonthYearPicker
+                                ? Icons.expand_less
+                                : Icons.expand_more,
                             color: _textMid,
                             size: 20,
                           ),
@@ -2423,10 +3045,12 @@ class _CalendarDialogState extends State<_CalendarDialog> {
                     if (!_showMonthYearPicker)
                       IconButton(
                         icon: Icon(Icons.chevron_right,
-                            color: _canGoNext ? _textMid : _textLight.withValues(alpha: 0.3)),
+                            color: _canGoNext
+                                ? _textMid
+                                : _textLight.withValues(alpha: 0.3)),
                         onPressed: _canGoNext
-                            ? () => setState(() =>
-                                _viewMonth = DateTime(_viewMonth.year, _viewMonth.month + 1, 1))
+                            ? () => setState(() => _viewMonth = DateTime(
+                                _viewMonth.year, _viewMonth.month + 1, 1))
                             : null,
                       )
                     else
@@ -2440,16 +3064,18 @@ class _CalendarDialogState extends State<_CalendarDialog> {
                   const SizedBox(height: 4),
                   // Day-of-week headers
                   Row(
-                    children: ['S','M','T','W','Th','F','S'].map((d) => Expanded(
-                      child: Text(d,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontFamily: 'PlusJakartaSans',
-                            fontSize: 14,
-                            fontWeight: FontWeight.w600,
-                            color: _textLight,
-                          )),
-                    )).toList(),
+                    children: ['S', 'M', 'T', 'W', 'Th', 'F', 'S']
+                        .map((d) => Expanded(
+                              child: Text(d,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(
+                                    fontFamily: 'PlusJakartaSans',
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: _textLight,
+                                  )),
+                            ))
+                        .toList(),
                   ),
                   const SizedBox(height: 6),
                   // Calendar grid
@@ -2463,18 +3089,20 @@ class _CalendarDialogState extends State<_CalendarDialog> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Selected', style: TextStyle(
-                          fontFamily: 'PlusJakartaSans',
-                          fontSize: 13,
-                          color: _textMid,
-                        )),
+                        const Text('Selected',
+                            style: TextStyle(
+                              fontFamily: 'PlusJakartaSans',
+                              fontSize: 13,
+                              color: _textMid,
+                            )),
                         const SizedBox(height: 4),
-                        Text(_formatFull(_selected), style: const TextStyle(
-                          fontFamily: 'PlusJakartaSans',
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
-                          color: _textDark,
-                        )),
+                        Text(_formatFull(_selected),
+                            style: const TextStyle(
+                              fontFamily: 'PlusJakartaSans',
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                              color: _textDark,
+                            )),
                       ],
                     ),
                   ),
@@ -2504,13 +3132,13 @@ class _TodoDialog extends StatefulWidget {
 
 class _TodoDialogState extends State<_TodoDialog> {
   late List<_Task> _tasks;
-  final _ctrl  = TextEditingController();
+  final _ctrl = TextEditingController();
   final _focus = FocusNode();
 
-  static const _textDark  = Color(0xFF1A1A2E);
+  static const _textDark = Color(0xFF1A1A2E);
   static const _textLight = Color(0xFF8A8AAA);
-  static const _green     = Color(0xFF4A7C59);
-  static const _purple    = Color(0xFF8B7BB0);
+  static const _green = Color(0xFF4A7C59);
+  static const _purple = Color(0xFF8B7BB0);
 
   @override
   void initState() {
@@ -2529,13 +3157,14 @@ class _TodoDialogState extends State<_TodoDialog> {
   void _delete(_Task task) => setState(() => _tasks.remove(task));
 
   List<_Task> get _sorted => [
-    ..._tasks.where((t) => !t.done),
-    ..._tasks.where((t) => t.done),
-  ];
+        ..._tasks.where((t) => !t.done),
+        ..._tasks.where((t) => t.done),
+      ];
 
   void _save() {
     final pending = _ctrl.text.trim();
-    if (pending.isNotEmpty) _tasks.insert(0, _Task(text: pending)); // newest at top
+    if (pending.isNotEmpty)
+      _tasks.insert(0, _Task(text: pending)); // newest at top
     widget.onSave(_sorted);
     Navigator.of(context).pop();
   }
@@ -2554,7 +3183,8 @@ class _TodoDialogState extends State<_TodoDialog> {
           constraints: const BoxConstraints(maxWidth: 420),
           child: Container(
             constraints: BoxConstraints(maxHeight: dialogMaxH),
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(24)),
+            decoration: BoxDecoration(
+                color: Colors.white, borderRadius: BorderRadius.circular(24)),
             padding: const EdgeInsets.fromLTRB(24, 24, 24, 24),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2563,15 +3193,17 @@ class _TodoDialogState extends State<_TodoDialog> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('To-do', style: TextStyle(
-                      fontFamily: 'PlusJakartaSans',
-                      fontSize: 22,
-                      fontWeight: FontWeight.w700,
-                      color: _textDark,
-                    )),
+                    const Text('To-do',
+                        style: TextStyle(
+                          fontFamily: 'PlusJakartaSans',
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          color: _textDark,
+                        )),
                     GestureDetector(
                       onTap: () => Navigator.of(context).pop(),
-                      child: const Icon(Icons.close, color: _textLight, size: 24),
+                      child:
+                          const Icon(Icons.close, color: _textLight, size: 24),
                     ),
                   ],
                 ),
@@ -2590,7 +3222,8 @@ class _TodoDialogState extends State<_TodoDialog> {
                     color: const Color(0xFFF5F3FB),
                     borderRadius: BorderRadius.circular(14),
                   ),
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: Row(
                     children: [
                       const Icon(Icons.add, color: _textLight, size: 20),
@@ -2599,17 +3232,27 @@ class _TodoDialogState extends State<_TodoDialog> {
                         child: TextField(
                           controller: _ctrl,
                           focusNode: _focus,
-                          style: const TextStyle(fontFamily: 'PlusJakartaSans', fontSize: 15, color: _textDark),
+                          style: const TextStyle(
+                              fontFamily: 'PlusJakartaSans',
+                              fontSize: 15,
+                              color: _textDark),
                           decoration: const InputDecoration(
                             hintText: 'Add a task...',
-                            hintStyle: TextStyle(fontFamily: 'PlusJakartaSans', color: _textLight, fontSize: 15),
+                            hintStyle: TextStyle(
+                                fontFamily: 'PlusJakartaSans',
+                                color: _textLight,
+                                fontSize: 15),
                             border: InputBorder.none,
                             isDense: true,
                             contentPadding: EdgeInsets.zero,
                           ),
                           onSubmitted: (_) {
                             final text = _ctrl.text.trim();
-                            if (text.isNotEmpty) setState(() { _tasks.insert(0, _Task(text: text)); _ctrl.clear(); });
+                            if (text.isNotEmpty)
+                              setState(() {
+                                _tasks.insert(0, _Task(text: text));
+                                _ctrl.clear();
+                              });
                           },
                           textInputAction: TextInputAction.done,
                         ),
@@ -2625,16 +3268,18 @@ class _TodoDialogState extends State<_TodoDialog> {
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _purple,
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(14)),
                       padding: const EdgeInsets.symmetric(vertical: 16),
                       elevation: 0,
                     ),
-                    child: const Text('SAVE', style: TextStyle(
-                      fontFamily: 'PlusJakartaSans',
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 1.5,
-                    )),
+                    child: const Text('SAVE',
+                        style: TextStyle(
+                          fontFamily: 'PlusJakartaSans',
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.5,
+                        )),
                   ),
                 ),
               ],
@@ -2667,24 +3312,28 @@ class _TodoDialogState extends State<_TodoDialog> {
                   width: 1.8,
                 ),
               ),
-              child: task.done ? const Icon(Icons.check, color: Colors.white, size: 14) : null,
+              child: task.done
+                  ? const Icon(Icons.check, color: Colors.white, size: 14)
+                  : null,
             ),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Text(task.text, style: TextStyle(
-              fontFamily: 'PlusJakartaSans',
-              fontSize: 15,
-              color: task.done ? _textLight : _textDark,
-              decoration: task.done ? TextDecoration.lineThrough : null,
-              decorationColor: _textLight,
-            )),
+            child: Text(task.text,
+                style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontSize: 15,
+                  color: task.done ? _textLight : _textDark,
+                  decoration: task.done ? TextDecoration.lineThrough : null,
+                  decorationColor: _textLight,
+                )),
           ),
           GestureDetector(
             onTap: () => _delete(task),
             child: Padding(
               padding: const EdgeInsets.only(left: 8),
-              child: Icon(Icons.delete_outline, color: Colors.red.shade200, size: 20),
+              child: Icon(Icons.delete_outline,
+                  color: Colors.red.shade200, size: 20),
             ),
           ),
         ],
@@ -2721,6 +3370,98 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
   bool _shareWithParent = true;
   bool _saving = false;
   String? _currentNudgeId;
+  String? _audioLocalPath;
+  int? _audioDurationSeconds;
+
+  // Cached per relevant identity (role/accountId/selectedDate), not recreated
+  // inline on every build — these used to be called directly in build() as
+  // `stream: _pendingTodayStream(role)`, which (since _pendingTodayStream
+  // bounds its query with Timestamp.now()) meant every rebuild — including
+  // the keyboard opening while typing an answer — created a genuinely NEW
+  // query, making StreamBuilder tear down and resubscribe, which destroyed
+  // the answer TextField's focus the instant it tried to appear. Same fix
+  // as session_tab.dart's _stream and the Nudges tab's cached streams.
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _pendingStreamCached;
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _answeredStreamCached;
+  late Stream<QuerySnapshot<Map<String, dynamic>>> _pastDateStreamCached;
+  // "Change Question" (parent + child) — keyed by the NUDGE's own dateKey field,
+  // not "today". changeNudgePrompt's daily counter lives on
+  // dailyData/{nudge.dateKey}, and a pending nudge shown here can be a stale,
+  // never-answered one from a previous day (its dateKey stays whatever day
+  // it was created for) — checking dailyData/{today} in that case reads the
+  // wrong document entirely and always shows the full count as unused.
+  // Cached with invalidation (not recreated every build) for the same
+  // stream-stability reason as the streams above.
+  String? _dailyDataKeyCached;
+  Stream<DocumentSnapshot<Map<String, dynamic>>>? _dailyDataStreamCached;
+  bool _changingQuestion = false;
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>> _dailyDataStreamFor(
+      String dateKey) {
+    if (_dailyDataKeyCached != dateKey) {
+      _dailyDataKeyCached = dateKey;
+      _dailyDataStreamCached = FirebaseFirestore.instance
+          .collection('families')
+          .doc(widget.familyId)
+          .collection('dailyData')
+          .doc(dateKey)
+          .snapshots();
+    }
+    return _dailyDataStreamCached!;
+  }
+
+  Future<void> _changeQuestion(
+      QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
+    setState(() => _changingQuestion = true);
+    try {
+      final result = await FirebaseFunctions.instance
+          .httpsCallable('changeNudgePrompt')
+          .call({
+        'familyId': widget.familyId,
+        'accountId': widget.accountId,
+        'nudgeId': doc.id,
+      });
+      final data = Map<String, dynamic>.from(result.data as Map);
+      if (data['ok'] != true && mounted) {
+        final reason = data['reason'] as String?;
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(reason == 'limit_reached'
+              ? "You've used all your question changes for today"
+              : "Couldn't change the question right now"),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text('Error: $e'), behavior: SnackBarBehavior.floating));
+      }
+    } finally {
+      if (mounted) setState(() => _changingQuestion = false);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _pendingStreamCached = _pendingTodayStream(widget.role);
+    _answeredStreamCached = _answeredStream(widget.role);
+    _pastDateStreamCached = _pastDateStream(widget.role);
+  }
+
+  @override
+  void didUpdateWidget(_DashboardNudgeWidget old) {
+    super.didUpdateWidget(old);
+    if (old.role != widget.role || old.accountId != widget.accountId) {
+      _pendingStreamCached = _pendingTodayStream(widget.role);
+      _answeredStreamCached = _answeredStream(widget.role);
+    }
+    if (old.role != widget.role ||
+        old.accountId != widget.accountId ||
+        old.selectedDate != widget.selectedDate) {
+      _pastDateStreamCached = _pastDateStream(widget.role);
+    }
+  }
 
   CollectionReference<Map<String, dynamic>> get _nudgesRef =>
       FirebaseFirestore.instance
@@ -2731,7 +3472,8 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
   // ── TODAY streams — use proven existing indexes ──────────────────────────
 
   // Latest pending nudge already sent (scheduledFor <= now) for any role
-  Stream<QuerySnapshot<Map<String, dynamic>>> _pendingTodayStream(String role) =>
+  Stream<QuerySnapshot<Map<String, dynamic>>> _pendingTodayStream(
+          String role) =>
       _nudgesRef
           .where('targetRole', isEqualTo: role)
           .where('targetAccountId', isEqualTo: widget.accountId)
@@ -2769,24 +3511,41 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
 
   Future<void> _save(QueryDocumentSnapshot<Map<String, dynamic>> doc) async {
     final answer = _ctrl.text.trim();
-    if (answer.isEmpty) return;
+    if (answer.isEmpty && _audioLocalPath == null) return;
     setState(() => _saving = true);
     try {
-      final data   = doc.data();
+      final data = doc.data();
       final sentAt = data['notificationSentAt'];
-      final now    = Timestamp.now();
+      final now = Timestamp.now();
       int? latency;
       if (sentAt is Timestamp) {
         latency = (now.seconds - sentAt.seconds).clamp(0, 99999999);
       }
+      Map<String, dynamic> response;
+      if (_audioLocalPath != null) {
+        final url = await AudioUploadService.uploadNudgeAnswer(
+          familyId: widget.familyId,
+          nudgeId: doc.id,
+          localFilePath: _audioLocalPath!,
+        );
+        response = {
+          'type': 'audio',
+          'audioUrl': url,
+          'audioDurationSeconds': _audioDurationSeconds ?? 0,
+        };
+      } else {
+        response = {'type': 'text', 'text': answer};
+      }
       await doc.reference.update({
         'status': 'answered',
         'shareWithParent': _shareWithParent,
-        'response': {'text': answer},
+        'response': response,
         'answeredAt': FieldValue.serverTimestamp(),
         if (latency != null) 'responseLatencySeconds': latency,
       });
       _ctrl.clear();
+      _audioLocalPath = null;
+      _audioDurationSeconds = null;
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -2795,8 +3554,29 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
   String _formatTimestamp(dynamic ts) {
     if (ts is! Timestamp) return '';
     final dt = ts.toDate();
-    const wdays = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'];
-    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const wdays = [
+      'Monday',
+      'Tuesday',
+      'Wednesday',
+      'Thursday',
+      'Friday',
+      'Saturday',
+      'Sunday'
+    ];
+    const months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
     final h = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
     final m = dt.minute.toString().padLeft(2, '0');
     final ampm = dt.hour < 12 ? 'am' : 'pm';
@@ -2805,30 +3585,32 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
 
   @override
   Widget build(BuildContext context) {
-    final role    = widget.role;
     final isToday = widget.selectedDate == _todayDate();
 
     // ── Today: two-stream combine (proven existing indexes) ──────────────────
     if (isToday) {
       return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-        stream: _pendingTodayStream(role),
+        stream: _pendingStreamCached,
         builder: (context, pendingSnap) {
           return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-            stream: _answeredStream(role),
+            stream: _answeredStreamCached,
             builder: (context, answeredSnap) {
-              final waiting = pendingSnap.connectionState == ConnectionState.waiting
-                  || answeredSnap.connectionState == ConnectionState.waiting;
+              final waiting =
+                  pendingSnap.connectionState == ConnectionState.waiting ||
+                      answeredSnap.connectionState == ConnectionState.waiting;
               if (waiting) return _loadingCard();
 
-              final pending  = pendingSnap.data?.docs  ?? [];
+              final pending = pendingSnap.data?.docs ?? [];
               final answered = answeredSnap.data?.docs ?? [];
 
+              // Any not-yet-answered nudge takes priority, regardless of
+              // timing, so the widget always surfaces something actionable.
+              // Only once BOTH of today's nudges are answered does it fall
+              // back to showing the latest one, with its "Answered" tag
+              // (already rendered by _buildCard based on the doc's own
+              // status) — not a comparison of whichever was scheduled later.
               QueryDocumentSnapshot<Map<String, dynamic>>? best;
-              if (pending.isNotEmpty && answered.isNotEmpty) {
-                final pt = (pending.first.data()['scheduledFor']  as Timestamp?)?.millisecondsSinceEpoch ?? 0;
-                final at = (answered.first.data()['scheduledFor'] as Timestamp?)?.millisecondsSinceEpoch ?? 0;
-                best = pt >= at ? pending.first : answered.first;
-              } else if (pending.isNotEmpty) {
+              if (pending.isNotEmpty) {
                 best = pending.first;
               } else if (answered.isNotEmpty) {
                 best = answered.first;
@@ -2843,9 +3625,10 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
 
     // ── Past date: single dateKey stream (new index) ──────────────────────────
     return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
-      stream: _pastDateStream(role),
+      stream: _pastDateStreamCached,
       builder: (context, snap) {
-        if (snap.connectionState == ConnectionState.waiting) return _loadingCard();
+        if (snap.connectionState == ConnectionState.waiting)
+          return _loadingCard();
         // If index still building, snap.hasError is true — show loading rather
         // than a misleading empty state
         if (snap.hasError) return _loadingCard();
@@ -2861,8 +3644,10 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Expanded(
-          child: _gradientShell(child: const Center(
-            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+          child: _gradientShell(
+              child: const Center(
+            child:
+                CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
           )),
         ),
         _viewAllRow(),
@@ -2878,20 +3663,22 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Expanded(
-            child: _gradientShell(child: Center(
+            child: _gradientShell(
+                child: Center(
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
                 child: Text(
-                  widget.selectedDate == _todayDate()
-                      ? 'No nudge sent yet today'
-                      : 'No nudge on this date',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(
-                    fontFamily: 'InstrumentSerif',
-                    fontSize: 20,
-                    fontStyle: FontStyle.italic,
-                    color: Colors.black.withValues(alpha: 0.6),
-                  )),
+                    widget.selectedDate == _todayDate()
+                        ? 'No nudge sent yet today'
+                        : 'No nudge on this date',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontFamily: 'InstrumentSerif',
+                      fontSize: 20,
+                      fontStyle: FontStyle.italic,
+                      color: Colors.black.withValues(alpha: 0.6),
+                    )),
               ),
             )),
           ),
@@ -2901,23 +3688,32 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
     }
 
     // ── nudge card ───────────────────────────────────────────────────────────
-    final data       = doc.data();
-    final question   = (data['prompt'] ?? '') as String;
-    final status     = (data['status'] ?? 'pending') as String;
+    final data = doc.data();
+    final question = (data['prompt'] ?? '') as String;
+    final status = (data['status'] ?? 'pending') as String;
     final isAnswered = status == 'answered';
-    final isParent   = widget.role == 'parent';
-    final dateLabel  = _formatTimestamp(data['scheduledFor']);
+    final isParent = widget.role == 'parent';
+    final dateLabel = _formatTimestamp(data['scheduledFor']);
 
     if (_currentNudgeId != doc.id) {
       _currentNudgeId = doc.id;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _ctrl.clear();
+        if (mounted) {
+          _ctrl.clear();
+          setState(() {
+            _audioLocalPath = null;
+            _audioDurationSeconds = null;
+          });
+        }
       });
     }
 
-    final answerText = isAnswered
-        ? ((data['response'] as Map?)?['text'] as String? ?? '')
-        : null;
+    final responseMap = data['response'] as Map?;
+    final answerText = isAnswered ? (responseMap?['text'] as String? ?? '') : null;
+    final isAudioResponse = isAnswered && (responseMap?['type'] == 'audio');
+    final answerAudioUrl = isAudioResponse ? (responseMap?['audioUrl'] as String?) : null;
+    final answerAudioDuration =
+        isAnswered ? (responseMap?['audioDurationSeconds'] as num?)?.toInt() : null;
 
     return Column(
       mainAxisSize: MainAxisSize.max,
@@ -2931,7 +3727,8 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                 // ── question + status pill ───────────────────────────────
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
                   decoration: BoxDecoration(
                     color: Colors.white.withValues(alpha: 0.38),
                     borderRadius: BorderRadius.circular(20),
@@ -2940,37 +3737,90 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(
-                        child: Text(question, style: const TextStyle(
-                          fontFamily: 'PlusJakartaSans',
-                          fontSize: 17,
-                          fontStyle: FontStyle.italic,
-                          fontWeight: FontWeight.w400,
-                          color: Colors.black,
-                          height: 1.3,
-                          letterSpacing: -0.2,
-                        )),
+                        child: Text(question,
+                            style: const TextStyle(
+                              fontFamily: 'PlusJakartaSans',
+                              fontSize: 17,
+                              fontStyle: FontStyle.italic,
+                              fontWeight: FontWeight.w400,
+                              color: Colors.black,
+                              height: 1.3,
+                              letterSpacing: -0.2,
+                            )),
                       ),
                       const SizedBox(width: 8),
                       Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 9, vertical: 3),
                         decoration: BoxDecoration(
                           color: Colors.white.withValues(alpha: 0.6),
                           borderRadius: BorderRadius.circular(99),
                         ),
                         child: Text(
-                          isParent
-                              ? (isAnswered ? 'Answered ✅' : 'Pending…')
-                              : (isAnswered ? 'Answered' : 'Today'),
-                          style: const TextStyle(
-                            fontFamily: 'PlusJakartaSans',
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.black,
-                          )),
+                            isParent
+                                ? (isAnswered ? 'Answered ✅' : 'Pending…')
+                                : (isAnswered ? 'Answered' : 'Today'),
+                            style: const TextStyle(
+                              fontFamily: 'PlusJakartaSans',
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.black,
+                            )),
                       ),
                     ],
                   ),
                 ),
+                if (!isAnswered) ...[
+                  const SizedBox(height: 6),
+                  StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                    stream: _dailyDataStreamFor(
+                        (data['dateKey'] as String?) ?? _dateKey(_todayDate())),
+                    builder: (context, snap) {
+                      final counts = snap.data?.data()?['nudgeChangeCount']
+                          as Map<String, dynamic>?;
+                      final used = (counts?[widget.accountId] as int?) ?? 0;
+                      final remaining = (3 - used).clamp(0, 3);
+                      final canChange = remaining > 0 && !_changingQuestion;
+                      return Align(
+                        alignment: Alignment.centerRight,
+                        child: ElevatedButton.icon(
+                          onPressed:
+                              canChange ? () => _changeQuestion(doc) : null,
+                          icon: _changingQuestion
+                              ? const SizedBox(
+                                  width: 13,
+                                  height: 13,
+                                  child: CircularProgressIndicator(
+                                      strokeWidth: 2, color: Colors.white))
+                              : const Icon(Icons.shuffle_rounded, size: 15),
+                          label: Text(
+                            remaining > 0
+                                ? 'Change ($remaining left)'
+                                : 'No changes left',
+                            style: const TextStyle(
+                                fontFamily: 'PlusJakartaSans',
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor:
+                                canChange ? Colors.black87 : Colors.black26,
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor: Colors.black26,
+                            disabledForegroundColor: Colors.white70,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(999)),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 6),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ],
                 const SizedBox(height: 10),
                 // ── answer area ──────────────────────────────────────────
                 Expanded(
@@ -2983,39 +3833,70 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                     ),
                     child: isAnswered
                         // Read-only when answered (any role)
-                        ? Text(
-                            answerText!.isNotEmpty ? answerText : '...',
-                            style: const TextStyle(
-                              fontFamily: 'PlusJakartaSans',
-                              fontSize: 15,
-                              fontStyle: FontStyle.italic,
-                              color: Colors.black,
-                              height: 1.3,
-                            ))
-                        // Pending: editable for both parent and child
-                        : TextField(
-                            controller: _ctrl,
-                            maxLines: null,
-                            expands: true,
-                            textAlignVertical: TextAlignVertical.top,
-                            style: const TextStyle(
-                              fontFamily: 'PlusJakartaSans',
-                              fontSize: 15,
-                              fontStyle: FontStyle.italic,
-                              color: Colors.black,
-                              height: 1.3,
-                            ),
-                            decoration: const InputDecoration(
-                              hintText: 'Type here...',
-                              hintStyle: TextStyle(
-                                fontFamily: 'PlusJakartaSans',
-                                fontSize: 15,
-                                fontStyle: FontStyle.italic,
-                                color: Colors.black54,
+                        ? (answerAudioUrl != null
+                            ? Align(
+                                alignment: Alignment.centerLeft,
+                                child: AudioPlayButton(
+                                    audioUrl: answerAudioUrl, durationSeconds: answerAudioDuration),
+                              )
+                            : Text(answerText!.isNotEmpty ? answerText : '...',
+                                style: const TextStyle(
+                                  fontFamily: 'PlusJakartaSans',
+                                  fontSize: 15,
+                                  fontStyle: FontStyle.italic,
+                                  color: Colors.black,
+                                  height: 1.3,
+                                )))
+                        // Pending: editable for both parent and child. Child
+                        // also gets a mic option (see AudioRecorderField) —
+                        // recording, when present, takes priority over
+                        // whatever's typed (see _save).
+                        : Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(
+                                child: TextField(
+                                  controller: _ctrl,
+                                  maxLines: null,
+                                  expands: true,
+                                  enabled: _audioLocalPath == null,
+                                  textAlignVertical: TextAlignVertical.top,
+                                  style: const TextStyle(
+                                    fontFamily: 'PlusJakartaSans',
+                                    fontSize: 15,
+                                    fontStyle: FontStyle.italic,
+                                    color: Colors.black,
+                                    height: 1.3,
+                                  ),
+                                  decoration: InputDecoration(
+                                    hintText: _audioLocalPath == null
+                                        ? 'Type here...'
+                                        : 'Recorded a voice answer below — typed text is ignored',
+                                    hintStyle: const TextStyle(
+                                      fontFamily: 'PlusJakartaSans',
+                                      fontSize: 15,
+                                      fontStyle: FontStyle.italic,
+                                      color: Colors.black54,
+                                    ),
+                                    border: InputBorder.none,
+                                    isCollapsed: true,
+                                  ),
+                                ),
                               ),
-                              border: InputBorder.none,
-                              isCollapsed: true,
-                            ),
+                              if (!isParent) ...[
+                                const SizedBox(height: 8),
+                                Align(
+                                  alignment: Alignment.centerLeft,
+                                  child: AudioRecorderField(
+                                    key: ValueKey(doc.id),
+                                    onChanged: (path, dur) => setState(() {
+                                      _audioLocalPath = path;
+                                      _audioDurationSeconds = dur;
+                                    }),
+                                  ),
+                                ),
+                              ],
+                            ],
                           ),
                   ),
                 ),
@@ -3033,65 +3914,80 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                       if (!isParent) ...[
                         InkWell(
                           borderRadius: BorderRadius.circular(12),
-                          onTap: () => setState(() => _shareWithParent = !_shareWithParent),
+                          onTap: () => setState(
+                              () => _shareWithParent = !_shareWithParent),
                           child: Row(children: [
                             SizedBox(
-                              width: 24, height: 24,
+                              width: 24,
+                              height: 24,
                               child: Checkbox(
                                 value: _shareWithParent,
-                                onChanged: (v) => setState(() => _shareWithParent = v ?? true),
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(4)),
-                                side: const BorderSide(color: Colors.black, width: 1.4),
-                                fillColor: WidgetStateProperty.resolveWith((_) => Colors.white),
+                                onChanged: (v) => setState(
+                                    () => _shareWithParent = v ?? true),
+                                shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(4)),
+                                side: const BorderSide(
+                                    color: Colors.black, width: 1.4),
+                                fillColor: WidgetStateProperty.resolveWith(
+                                    (_) => Colors.white),
                                 checkColor: Colors.black,
-                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                                visualDensity: const VisualDensity(horizontal: -4, vertical: -4),
+                                materialTapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: const VisualDensity(
+                                    horizontal: -4, vertical: -4),
                               ),
                             ),
                             const SizedBox(width: 8),
                             const Text('Share with parent',
-                              style: TextStyle(
-                                fontFamily: 'InstrumentSerif',
-                                fontSize: 14,
-                                fontStyle: FontStyle.italic,
-                                color: Colors.black,
-                              )),
+                                style: TextStyle(
+                                  fontFamily: 'InstrumentSerif',
+                                  fontSize: 14,
+                                  fontStyle: FontStyle.italic,
+                                  color: Colors.black,
+                                )),
                           ]),
                         ),
                         const Spacer(),
                       ] else if (dateLabel.isNotEmpty) ...[
                         Expanded(
                           child: Text(dateLabel,
-                            style: TextStyle(
-                              fontFamily: 'InstrumentSerif',
-                              fontSize: 12,
-                              fontStyle: FontStyle.italic,
-                              color: Colors.black.withValues(alpha: 0.5),
-                            )),
+                              style: TextStyle(
+                                fontFamily: 'InstrumentSerif',
+                                fontSize: 12,
+                                fontStyle: FontStyle.italic,
+                                color: Colors.black.withValues(alpha: 0.5),
+                              )),
                         ),
                       ] else ...[
                         const Spacer(),
                       ],
                       SizedBox(
-                        width: 110, height: 42,
+                        width: 110,
+                        height: 42,
                         child: ElevatedButton(
                           onPressed: _saving ? null : () => _save(doc),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.white.withValues(alpha: 0.55),
+                            backgroundColor:
+                                Colors.white.withValues(alpha: 0.55),
                             foregroundColor: Colors.black,
                             elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(999)),
                           ),
                           child: _saving
-                              ? const SizedBox(width: 16, height: 16,
-                                  child: CircularProgressIndicator(strokeWidth: 2))
-                              : const Text('SAVE', style: TextStyle(
-                                  fontFamily: 'PlusJakartaSans',
-                                  fontSize: 14,
-                                  fontStyle: FontStyle.italic,
-                                  fontWeight: FontWeight.w600,
-                                  letterSpacing: 0.6,
-                                )),
+                              ? const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child:
+                                      CircularProgressIndicator(strokeWidth: 2))
+                              : const Text('SAVE',
+                                  style: TextStyle(
+                                    fontFamily: 'PlusJakartaSans',
+                                    fontSize: 14,
+                                    fontStyle: FontStyle.italic,
+                                    fontWeight: FontWeight.w600,
+                                    letterSpacing: 0.6,
+                                  )),
                         ),
                       ),
                     ],
@@ -3099,6 +3995,17 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                   if (!isParent && dateLabel.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(dateLabel,
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          fontFamily: 'InstrumentSerif',
+                          fontSize: 12,
+                          fontStyle: FontStyle.italic,
+                          color: Colors.black.withValues(alpha: 0.5),
+                        )),
+                  ],
+                ] else if (dateLabel.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(dateLabel,
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         fontFamily: 'InstrumentSerif',
@@ -3106,17 +4013,6 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
                         fontStyle: FontStyle.italic,
                         color: Colors.black.withValues(alpha: 0.5),
                       )),
-                  ],
-                ] else if (dateLabel.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(dateLabel,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontFamily: 'InstrumentSerif',
-                      fontSize: 12,
-                      fontStyle: FontStyle.italic,
-                      color: Colors.black.withValues(alpha: 0.5),
-                    )),
                 ],
               ],
             ),
@@ -3171,15 +4067,16 @@ class _DashboardNudgeWidgetState extends State<_DashboardNudgeWidget> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text('View more nudges',
-              style: TextStyle(
-                fontFamily: 'PlusJakartaSans',
-                fontStyle: FontStyle.italic,
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: const Color(0xFF4A7C59).withValues(alpha: 0.85),
-              )),
+                style: TextStyle(
+                  fontFamily: 'PlusJakartaSans',
+                  fontStyle: FontStyle.italic,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: const Color(0xFF4A7C59).withValues(alpha: 0.85),
+                )),
             const SizedBox(width: 4),
-            const Icon(Icons.arrow_forward_ios, size: 12, color: Color(0xFF4A7C59)),
+            const Icon(Icons.arrow_forward_ios,
+                size: 12, color: Color(0xFF4A7C59)),
           ],
         ),
       ),
@@ -3211,4 +4108,3 @@ class _TrianglePainter extends CustomPainter {
 // ══════════════════════════════════════════════════════════════════════════════
 // Session placeholder
 // ══════════════════════════════════════════════════════════════════════════════
-
